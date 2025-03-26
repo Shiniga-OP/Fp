@@ -426,137 +426,168 @@ class AnalisadorSintatico {
     }
 }
 
+class Escopo {
+    private final Map<String, String> variaveis = new HashMap<>();
+    private final Escopo pai;
+
+    public Escopo(Escopo pai) {
+        this.pai = pai;
+    }
+
+    public void definir(String nome, String valor) {
+        variaveis.put(nome, valor);
+    }
+
+    public String obter(String nome) {
+        if (variaveis.containsKey(nome)) {
+            return variaveis.get(nome);
+        } else if (pai != null) {
+            return pai.obter(nome);
+        } else {
+            return ""; // variavel nao encontrada
+        }
+    }
+}
+
 class Interpretador {
     private final Map<String, NoFuncao> funcoes = new HashMap<>();
-    private final Map<String, String> variaveis = new HashMap<>();
-    
-    public void executar(List<No> nos) {
-       for(No no : nos) {
-           if(no instanceof NoFuncao) {
-               funcoes.put(((NoFuncao) no).nome, (NoFuncao) no);
-           } else if(no instanceof NoAtribuicao) {
-			   NoAtribuicao atribuicao = (NoAtribuicao) no;
-			   String valorResolvido = resolverValor(atribuicao.valor);
-			   variaveis.put(atribuicao.nome, valorResolvido);
-		   } else if(no instanceof NoChamadaFuncao) {
-               executarChamada((NoChamadaFuncao) no);
-           } else {
-               System.err.println("tipo de nó desconhecido: " + no.getClass().getSimpleName());
-           }
-       }
-   }
-   
-    private void executarChamada(NoChamadaFuncao chamada) {
-        switch(chamada.nome) {
-            // funcoes nativas:
-            case "log":
-            List<String> args = new ArrayList<>();
-            for(String arg : chamada.argumentos) {
-				if(variaveis.containsKey(arg)) args.add(variaveis.getOrDefault(variaveis.get(arg), variaveis.get(arg)));
-                else args.add(variaveis.getOrDefault(arg, arg));
-             }
-             System.out.println(String.join(" ", args));
-             break;
-             // arquivos:
-             case "criarArquivo":
-             ArquivosUtil.escreverArquivo(chamada.argumentos.get(0), chamada.argumentos.get(1));
-             break;
-             case "lerArquivo":
-             ArquivosUtil.lerArquivo(chamada.argumentos.get(0));
-             break;
-            // se nao for nativa chama uma existente
-            default:
-            exeFuncCustomi(chamada);
-         }
-     }
+    private Escopo escopoAtual = new Escopo(null); // escopo global
 
-    private void exeFuncCustomi(NoChamadaFuncao chamada) {
-        NoFuncao funcao = funcoes.get(chamada.nome);
-        if(funcao==null) {
-            System.err.println("função não encontrada: "+chamada.nome);
-            return;
-        }
-        
-        Map<String, String> ambiente = new HashMap<>();
-        for(int i=0; i<funcao.parametros.size(); i++) {
-            ambiente.put(funcao.parametros.get(i), chamada.argumentos.get(i));
-        }
-        
-        for(No no : funcao.corpo) {
-            if(no instanceof NoChamadaFuncao) {
-                executarChamada(resolverArgumentos((NoChamadaFuncao) no, ambiente));
+    public void executar(List<No> nos) {
+        for (No no : nos) {
+            if (no instanceof NoFuncao) {
+                funcoes.put(((NoFuncao) no).nome, (NoFuncao) no);
+            } else if (no instanceof NoAtribuicao) {
+                NoAtribuicao atribuicao = (NoAtribuicao) no;
+                String valorResolvido = resolverValor(atribuicao.valor);
+                escopoAtual.definir(atribuicao.nome, valorResolvido);
+            } else if (no instanceof NoChamadaFuncao) {
+                executarChamada((NoChamadaFuncao) no);
+            } else {
+                System.err.println("tipo de nó desconhecido: " + no.getClass().getSimpleName());
             }
         }
     }
-	
-	private String resolverValor(No no) {
-		if(no instanceof NoValor) {
+
+    private void executarChamada(NoChamadaFuncao chamada) {
+        if (funcoes.containsKey(chamada.nome)) {
+            executarFuncao(chamada);
+        } else {
+            executarNativa(chamada);
+        }
+    }
+
+    private void executarFuncao(NoChamadaFuncao chamada) {
+        NoFuncao funcao = funcoes.get(chamada.nome);
+        if (funcao == null) {
+            System.err.println("funcao nao encontrada: " + chamada.nome);
+            return;
+        }
+
+        Escopo escopoAnterior = escopoAtual;
+        escopoAtual = new Escopo(escopoAnterior); // criar novo escopo
+
+        for (int i = 0; i < funcao.parametros.size(); i++) {
+            escopoAtual.definir(funcao.parametros.get(i), chamada.argumentos.get(i));
+        }
+
+        for (No no : funcao.corpo) {
+            if (no instanceof NoChamadaFuncao) {
+                executarChamada((NoChamadaFuncao) no);
+            } else if (no instanceof NoAtribuicao) {
+                NoAtribuicao atribuicao = (NoAtribuicao) no;
+                String valorResolvido = resolverValor(atribuicao.valor);
+                escopoAtual.definir(atribuicao.nome, valorResolvido);
+            }
+        }
+
+        escopoAtual = escopoAnterior; // voltar para o escopo anterior
+    }
+
+    private void executarNativa(NoChamadaFuncao chamada) {
+        switch (chamada.nome) {
+            case "log":
+                List<String> args = new ArrayList<>();
+                for (String arg : chamada.argumentos) {
+                    args.add(escopoAtual.obter(arg));
+                }
+                System.out.println(String.join(" ", args));
+                break;
+            case "criarArquivo":
+                ArquivosUtil.escreverArquivo(chamada.argumentos.get(0), chamada.argumentos.get(1));
+                break;
+            case "lerArquivo":
+                ArquivosUtil.lerArquivo(chamada.argumentos.get(0));
+                break;
+            default:
+                System.err.println("funcao nativa desconhecida: " + chamada.nome);
+        }
+    }
+
+    private String resolverValor(No no) {
+		if (no instanceof NoValor) {
 			NoValor valor = (NoValor) no;
-			if(valor.tipo==TipoToken.IDENTIFICADOR) {
-				return variaveis.getOrDefault(valor.valor, ""); // busca variavel
+			if (valor.tipo == TipoToken.IDENTIFICADOR) {
+				return escopoAtual.obter(valor.valor); // busca variavel no escopo certo
 			}
-			return valor.valor; // retorna valor direto(string ou número)
-		} else if(no instanceof NoAdicao) {
+			return valor.valor;
+		} else if (no instanceof NoAdicao) {
 			NoAdicao adicao = (NoAdicao) no;
 			String val1 = resolverValor(adicao.esquerda);
 			String val2 = resolverValor(adicao.direita);
-			
+
 			try {
 				return String.valueOf(Float.parseFloat(val1) + Float.parseFloat(val2));
-			} catch(NumberFormatException b) {
-				return val1 + val2; // string + string;
+			} catch (NumberFormatException e) {
+				return val1 + val2; // string + string
 			}
-		} else if(no instanceof NoSubtracao) {
-			NoSubtracao adicao = (NoSubtracao) no;
-			String val1 = resolverValor(adicao.esquerda);
-			String val2 = resolverValor(adicao.direita);
-			
+		} else if (no instanceof NoSubtracao) {
+			NoSubtracao subtracao = (NoSubtracao) no;
+			String val1 = resolverValor(subtracao.esquerda);
+			String val2 = resolverValor(subtracao.direita);
+
 			try {
 				return String.valueOf(Float.parseFloat(val1) - Float.parseFloat(val2));
-			} catch(NumberFormatException b) {
-				return val1.replace(val2, "");
+			} catch (NumberFormatException e) {
+				return val1.replace(val2, ""); // string - string
 			}
-		} else if(no instanceof NoMultiplicacao) {
-			NoMultiplicacao adicao = (NoMultiplicacao) no;
-			String val1 = resolverValor(adicao.esquerda);
-			String val2 = resolverValor(adicao.direita);
-			
+		} else if (no instanceof NoMultiplicacao) {
+			NoMultiplicacao multiplicacao = (NoMultiplicacao) no;
+			String val1 = resolverValor(multiplicacao.esquerda);
+			String val2 = resolverValor(multiplicacao.direita);
+
 			try {
-					return String.valueOf(Float.parseFloat(val1) * Float.parseFloat(val2));
-			} catch(NumberFormatException b) {
-				System.err.println("erro, nao é possivel multiplicar duas strings");
+				return String.valueOf(Float.parseFloat(val1) * Float.parseFloat(val2));
+			} catch (NumberFormatException e) {
+				System.err.println("erro: nao é possivel multiplicar strings.");
+				return "";
 			}
-		} else if(no instanceof NoDivisao) {
-			NoDivisao adicao = (NoDivisao) no;
-			String val1 = resolverValor(adicao.esquerda);
-			String val2 = resolverValor(adicao.direita);
-			
+		} else if (no instanceof NoDivisao) {
+			NoDivisao divisao = (NoDivisao) no;
+			String val1 = resolverValor(divisao.esquerda);
+			String val2 = resolverValor(divisao.direita);
+
 			try {
 				return String.valueOf(Float.parseFloat(val1) / Float.parseFloat(val2));
-			} catch(NumberFormatException b) {
-				System.err.println("erro, nao é possivel dividir duas strings");
+			} catch (NumberFormatException e) {
+				System.err.println("erro: nao é possivel dividir strings.");
+				return "";
 			}
-		} else if(no instanceof NoPorcentagem) {
-			NoPorcentagem adicao = (NoPorcentagem) no;
-			String val1 = resolverValor(adicao.esquerda);
-			String val2 = resolverValor(adicao.direita);
-			
+		} else if (no instanceof NoPorcentagem) {
+			NoPorcentagem porcentagem = (NoPorcentagem) no;
+			String val1 = resolverValor(porcentagem.esquerda);
+			String val2 = resolverValor(porcentagem.direita);
+
 			try {
 				return String.valueOf(Float.parseFloat(val1) % Float.parseFloat(val2));
-				} catch(NumberFormatException b) {
-					System.err.println("erro, nao é possivel capturar a porcentagem de strings");
-				}
+			} catch (NumberFormatException e) {
+				System.err.println("erro: nao é possível calcular porcentagem de strings.");
+				return "";
 			}
+		}
+
 		return "";
 	}
-	
-    private NoChamadaFuncao resolverArgumentos(NoChamadaFuncao chamada, Map<String, String> ambiente) {
-        List<String> argsResolvidos = new ArrayList<>();
-        for(String arg : chamada.argumentos) {
-            argsResolvidos.add(ambiente.getOrDefault(arg, arg));
-        }
-        return new NoChamadaFuncao(chamada.nome, argsResolvidos);
-    }
 }
 
 class ArquivosUtil {
