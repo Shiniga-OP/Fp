@@ -14,6 +14,16 @@ enum TipoToken {
 	MULTIPLICACAO,
 	DIVISAO,
 	PORCENTAGEM,
+	// condicionais:
+	SE,
+	SENAO,
+	ENTAO,
+	IGUAL_IGUAL,
+	DIFERENTE,
+	MAIOR,
+	MENOR,
+	MAIOR_IGUAL,
+	MENOR_IGUAL,
     // variaveis:
     VARIAVEL,
 	// metodos
@@ -103,10 +113,6 @@ class AnalisadorLexico {
                 tokens.add(new Token(TipoToken.VIRGULA, ","));
                 posicao++;
                 return true;
-            case '=':
-                tokens.add(new Token(TipoToken.ATRIBUICAO, "="));
-                posicao++;
-                return true;
 			case '+':
                 tokens.add(new Token(TipoToken.ADICAO, "+"));
                 posicao++;
@@ -127,6 +133,41 @@ class AnalisadorLexico {
                 tokens.add(new Token(TipoToken.PORCENTAGEM, "%"));
                 posicao++;
                 return true;
+			case '!':
+				if(posicao+1<codigo.length() && codigo.charAt(posicao+1)=='=') {
+					tokens.add(new Token(TipoToken.DIFERENTE, "!="));
+					posicao += 2;
+				} else {
+					System.err.println("operador invalido: '!'");
+				}
+				return true;
+			case '=':
+				if(posicao+1<codigo.length() && codigo.charAt(posicao+1)=='=') {
+					tokens.add(new Token(TipoToken.IGUAL_IGUAL, "=="));
+					posicao += 2;
+				} else {
+					tokens.add(new Token(TipoToken.ATRIBUICAO, "="));
+					posicao++;
+				}
+				return true;
+			case '>':
+				if(posicao+1<codigo.length() && codigo.charAt(posicao + 1)=='=') {
+					tokens.add(new Token(TipoToken.MAIOR_IGUAL, ">="));
+					posicao += 2;
+				} else {
+					tokens.add(new Token(TipoToken.MAIOR, ">"));
+					posicao++;
+				}
+				return true;
+			case '<':
+				if(posicao+1<codigo.length() && codigo.charAt(posicao + 1)=='=') {
+					tokens.add(new Token(TipoToken.MENOR_IGUAL, "<="));
+					posicao += 2;
+				} else {
+					tokens.add(new Token(TipoToken.MENOR, "<"));
+					posicao++;
+				}
+				return true;
         }
         return false;
     }
@@ -141,6 +182,9 @@ class AnalisadorLexico {
         return new Token(
         valor.equals("func") ? TipoToken.FUNCAO :
         valor.equals("var") ? TipoToken.VARIAVEL :
+		valor.equals("se") ? TipoToken.SE :
+		valor.equals("senao") ? TipoToken.SENAO :
+		valor.equals("entao") ? TipoToken.ENTAO :
         TipoToken.IDENTIFICADOR, valor
         );
     }
@@ -251,6 +295,7 @@ class NoVariavel implements No {
     }
 }
 
+// metodos:
 class NoFuncao implements No {
     String nome;
     List<String> parametros;
@@ -273,6 +318,30 @@ class NoChamadaFuncao implements No {
     }
 }
 
+// condicionais:
+class NoIgualIgual implements No {
+    No esquerda;
+    No direita;
+    public NoIgualIgual(No esq, No dir) { this.esquerda = esq; this.direita = dir; }
+}
+
+class NoDiferente implements No {
+    No esquerda;
+    No direita;
+    public NoDiferente(No esq, No dir) { this.esquerda = esq; this.direita = dir; }
+}
+
+class NoCondicional implements No {
+    No condicao;
+    List<No> blocoSe;
+    List<No> blocoSenao;
+    public NoCondicional(No cond, List<No> se, List<No> senao) {
+        this.condicao = cond;
+        this.blocoSe = se;
+        this.blocoSenao = senao;
+    }
+}
+
 class AnalisadorSintatico {
     private final List<Token> tokens;
     private int atual = 0;
@@ -292,6 +361,7 @@ class AnalisadorSintatico {
     private No declaracao() {
        if(verificar(TipoToken.FUNCAO)) return declaracaoFuncao();
        if(verificar(TipoToken.VARIAVEL)) return declaracaoVariavel();
+		if(verificar(TipoToken.SE)) return declaracaoCondicional();
        return chamadaFuncao();
    }
 
@@ -326,7 +396,25 @@ class AnalisadorSintatico {
 
 			esquerda = new NoPorcentagem(esquerda, direita);
 		}
+		while(verificarOperadorComparacao()) {
+			TipoToken operador = olhar().tipo;
+			avancar();
+			No direita = lerTermo();
+			switch (operador) {
+				case IGUAL_IGUAL: esquerda = new NoIgualIgual(esquerda, direita); break;
+				case DIFERENTE: esquerda = new NoDiferente(esquerda, direita); break;
+			}
+		}
 		return esquerda;
+	}
+
+	private boolean verificarOperadorComparacao() {
+		return verificar(TipoToken.IGUAL_IGUAL) ||
+			verificar(TipoToken.DIFERENTE) ||
+			verificar(TipoToken.MAIOR) ||
+			verificar(TipoToken.MENOR) ||
+			verificar(TipoToken.MAIOR_IGUAL) ||
+			verificar(TipoToken.MENOR_IGUAL);
 	}
 
 	private No lerTermo() {
@@ -390,6 +478,32 @@ class AnalisadorSintatico {
         
         return new NoChamadaFuncao(nome, argumentos);
     }
+	
+	private No declaracaoCondicional() {
+		consumir(TipoToken.SE, "Esperado 'se'");
+		consumir(TipoToken.PARENTESE_ESQ, "Esperado '(' após 'se'");
+		No condicao = lerExpressao(); // Lógica para expressões booleanas
+		consumir(TipoToken.PARENTESE_DIR, "Esperado ')' após condição");
+		consumir(TipoToken.CHAVE_ESQ, "Esperado '{' após condição");
+
+		List<No> blocoSe = new ArrayList<>();
+		while (!verificar(TipoToken.CHAVE_DIR)) {
+			blocoSe.add(declaracao());
+		}
+		consumir(TipoToken.CHAVE_DIR, "Esperado '}'");
+
+		List<No> blocoSenao = new ArrayList<>();
+		if (verificar(TipoToken.SENAO)) {
+			avancar();
+			consumir(TipoToken.CHAVE_ESQ, "Esperado '{' após 'senao'");
+			while (!verificar(TipoToken.CHAVE_DIR)) {
+				blocoSenao.add(declaracao());
+			}
+			consumir(TipoToken.CHAVE_DIR, "Esperado '}'");
+		}
+
+		return new NoCondicional(condicao, blocoSe, blocoSenao);
+	}
 
     private String lerArgumento() {
         if(verificar(TipoToken.STRING)) return consumir(TipoToken.STRING, "").valor;
@@ -405,7 +519,7 @@ class AnalisadorSintatico {
     }
 
     private boolean verificar(TipoToken tipo) {
-        return !estaNoFim() && olhar().tipo == tipo;
+        return !estaNoFim() && olhar().tipo==tipo;
     }
 
     private Token avancar() {
@@ -454,14 +568,22 @@ class Interpretador {
     private Escopo escopoAtual = new Escopo(null); // escopo global
 
     public void executar(List<No> nos) {
-        for (No no : nos) {
-            if (no instanceof NoFuncao) {
+        for(No no : nos) {
+            if(no instanceof NoCondicional) {
+				NoCondicional cond = (NoCondicional) no;
+				boolean resultado = avaliarCondicao(cond.condicao);
+				if(resultado) {
+					executar(cond.blocoSe);
+				} else if(!cond.blocoSenao.isEmpty()) {
+					executar(cond.blocoSenao);
+				}
+			} else if(no instanceof NoFuncao) {
                 funcoes.put(((NoFuncao) no).nome, (NoFuncao) no);
-            } else if (no instanceof NoAtribuicao) {
+            } else if(no instanceof NoAtribuicao) {
                 NoAtribuicao atribuicao = (NoAtribuicao) no;
                 String valorResolvido = resolverValor(atribuicao.valor);
                 escopoAtual.definir(atribuicao.nome, valorResolvido);
-            } else if (no instanceof NoChamadaFuncao) {
+            } else if(no instanceof NoChamadaFuncao) {
                 executarChamada((NoChamadaFuncao) no);
             } else {
                 System.err.println("tipo de nó desconhecido: " + no.getClass().getSimpleName());
@@ -469,8 +591,23 @@ class Interpretador {
         }
     }
 
+	private boolean avaliarCondicao(No condicao) {
+		if(condicao instanceof NoIgualIgual) {
+			NoIgualIgual op = (NoIgualIgual) condicao;
+			String valEsq = resolverValor(op.esquerda);
+			String valDir = resolverValor(op.direita);
+			return valEsq.equals(valDir);
+		} else if(condicao instanceof NoDiferente) {
+			NoDiferente op = (NoDiferente) condicao;
+			String valEsq = resolverValor(op.esquerda);
+			String valDir = resolverValor(op.direita);
+			return !valEsq.equals(valDir);
+		}
+		return false;
+	}
+
     private void executarChamada(NoChamadaFuncao chamada) {
-        if (funcoes.containsKey(chamada.nome)) {
+        if(funcoes.containsKey(chamada.nome)) {
             executarFuncao(chamada);
         } else {
             executarNativa(chamada);
@@ -479,7 +616,7 @@ class Interpretador {
 
     private void executarFuncao(NoChamadaFuncao chamada) {
         NoFuncao funcao = funcoes.get(chamada.nome);
-        if (funcao == null) {
+        if(funcao==null) {
             System.err.println("funcao nao encontrada: " + chamada.nome);
             return;
         }
@@ -487,14 +624,14 @@ class Interpretador {
         Escopo escopoAnterior = escopoAtual;
         escopoAtual = new Escopo(escopoAnterior); // criar novo escopo
 
-        for (int i = 0; i < funcao.parametros.size(); i++) {
+        for(int i=0; i<funcao.parametros.size(); i++) {
             escopoAtual.definir(funcao.parametros.get(i), chamada.argumentos.get(i));
         }
 
-        for (No no : funcao.corpo) {
-            if (no instanceof NoChamadaFuncao) {
+        for(No no : funcao.corpo) {
+            if(no instanceof NoChamadaFuncao) {
                 executarChamada((NoChamadaFuncao) no);
-            } else if (no instanceof NoAtribuicao) {
+            } else if(no instanceof NoAtribuicao) {
                 NoAtribuicao atribuicao = (NoAtribuicao) no;
                 String valorResolvido = resolverValor(atribuicao.valor);
                 escopoAtual.definir(atribuicao.nome, valorResolvido);
@@ -508,9 +645,7 @@ class Interpretador {
         switch (chamada.nome) {
             case "log":
                 List<String> args = new ArrayList<>();
-                for (String arg : chamada.argumentos) {
-                    args.add(escopoAtual.obter(arg));
-                }
+                for(String arg : chamada.argumentos) args.add(escopoAtual.obter(arg));
                 System.out.println(String.join(" ", args));
                 break;
             case "criarArquivo":
@@ -525,62 +660,62 @@ class Interpretador {
     }
 
     private String resolverValor(No no) {
-		if (no instanceof NoValor) {
+		if(no instanceof NoValor) {
 			NoValor valor = (NoValor) no;
-			if (valor.tipo == TipoToken.IDENTIFICADOR) {
+			if(valor.tipo==TipoToken.IDENTIFICADOR) {
 				return escopoAtual.obter(valor.valor); // busca variavel no escopo certo
 			}
 			return valor.valor;
-		} else if (no instanceof NoAdicao) {
+		} else if(no instanceof NoAdicao) {
 			NoAdicao adicao = (NoAdicao) no;
 			String val1 = resolverValor(adicao.esquerda);
 			String val2 = resolverValor(adicao.direita);
 
 			try {
 				return String.valueOf(Float.parseFloat(val1) + Float.parseFloat(val2));
-			} catch (NumberFormatException e) {
+			} catch(NumberFormatException e) {
 				return val1 + val2; // string + string
 			}
-		} else if (no instanceof NoSubtracao) {
+		} else if(no instanceof NoSubtracao) {
 			NoSubtracao subtracao = (NoSubtracao) no;
 			String val1 = resolverValor(subtracao.esquerda);
 			String val2 = resolverValor(subtracao.direita);
 
 			try {
 				return String.valueOf(Float.parseFloat(val1) - Float.parseFloat(val2));
-			} catch (NumberFormatException e) {
+			} catch(NumberFormatException e) {
 				return val1.replace(val2, ""); // string - string
 			}
-		} else if (no instanceof NoMultiplicacao) {
+		} else if(no instanceof NoMultiplicacao) {
 			NoMultiplicacao multiplicacao = (NoMultiplicacao) no;
 			String val1 = resolverValor(multiplicacao.esquerda);
 			String val2 = resolverValor(multiplicacao.direita);
 
 			try {
 				return String.valueOf(Float.parseFloat(val1) * Float.parseFloat(val2));
-			} catch (NumberFormatException e) {
+			} catch(NumberFormatException e) {
 				System.err.println("erro: nao é possivel multiplicar strings.");
 				return "";
 			}
-		} else if (no instanceof NoDivisao) {
+		} else if(no instanceof NoDivisao) {
 			NoDivisao divisao = (NoDivisao) no;
 			String val1 = resolverValor(divisao.esquerda);
 			String val2 = resolverValor(divisao.direita);
 
 			try {
 				return String.valueOf(Float.parseFloat(val1) / Float.parseFloat(val2));
-			} catch (NumberFormatException e) {
+			} catch(NumberFormatException e) {
 				System.err.println("erro: nao é possivel dividir strings.");
 				return "";
 			}
-		} else if (no instanceof NoPorcentagem) {
+		} else if(no instanceof NoPorcentagem) {
 			NoPorcentagem porcentagem = (NoPorcentagem) no;
 			String val1 = resolverValor(porcentagem.esquerda);
 			String val2 = resolverValor(porcentagem.direita);
 
 			try {
 				return String.valueOf(Float.parseFloat(val1) % Float.parseFloat(val2));
-			} catch (NumberFormatException e) {
+			} catch(NumberFormatException e) {
 				System.err.println("erro: nao é possível calcular porcentagem de strings.");
 				return "";
 			}
