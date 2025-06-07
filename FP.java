@@ -1,13 +1,20 @@
-import java.util.*;
-import java.io.*;
-import java.net.URLDecoder;
-import java.text.SimpleDateFormat;
+package com.fide;
+
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Collections;
+import java.io.File;
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.FileWriter;
 
 enum TipoToken {
     // tipos:
     STRING,
     NUMERO,
-    // operadores:
+    // operadores mamaticos:
     ATRIBUICAO,
 	ADICAO,
 	SUBTRACAO,
@@ -17,7 +24,8 @@ enum TipoToken {
 	// condicionais:
 	SE,
 	SENAO,
-	ENTAO,
+	POR,
+	ENQ,
 	IGUAL_IGUAL,
 	DIFERENTE,
 	MAIOR,
@@ -26,7 +34,9 @@ enum TipoToken {
 	MENOR_IGUAL,
     // variaveis:
     VARIAVEL,
-	// metodos
+	// metodos e classes
+	CLASSE,
+	NOVO,
     FUNCAO, 
     // nome:
     IDENTIFICADOR,
@@ -36,8 +46,11 @@ enum TipoToken {
     CHAVE_ESQ, 
     CHAVE_DIR,
     // expressoes:
+	PONTO,
     VIRGULA, 
     PONTO_VIRGULA,
+	RETORNE,
+	ESTE,
     FIM
 	}
 
@@ -168,6 +181,10 @@ class AnalisadorLexico {
 					posicao++;
 				}
 				return true;
+			case '.':
+				tokens.add(new Token(TipoToken.PONTO, "."));
+				posicao++;
+				return true;
         }
         return false;
     }
@@ -180,11 +197,20 @@ class AnalisadorLexico {
         }
         String valor = buffer.toString();
         return new Token(
+			valor.equals("enquanto") ? TipoToken.ENQ :
+			valor.equals("enq") ? TipoToken.ENQ :
+			valor.equals("por") ? TipoToken.POR :
+			valor.equals("classe") ? TipoToken.CLASSE :
+			valor.equals("novo") ? TipoToken.NOVO :
+			valor.equals("este") ? TipoToken.ESTE :
+			valor.equals("novo") ? TipoToken.NOVO :
 			valor.equals("func") ? TipoToken.FUNCAO :
+			valor.equals("retorne") ? TipoToken.RETORNE :
+			valor.equals("retornar") ? TipoToken.RETORNE :
 			valor.equals("var") ? TipoToken.VARIAVEL :
 			valor.equals("se") ? TipoToken.SE :
 			valor.equals("senao") ? TipoToken.SENAO :
-			valor.equals("entao") ? TipoToken.ENTAO :
+			valor.equals("senão") ? TipoToken.SENAO :
 			TipoToken.IDENTIFICADOR, valor
         );
     }
@@ -290,7 +316,46 @@ class NoVariavel implements No {
     }
 }
 
-// metodos:
+// metodos e classe:
+class NoEnq implements No {
+    No condicao;
+    List<No> corpo;
+    public NoEnq(No condicao, List<No> corpo) {
+        this.condicao = condicao;
+        this.corpo = corpo;
+    }
+}
+
+class NoPor implements No {
+    No inicializacao;
+    No condicao;
+    No incremento;
+    List<No> corpo;
+    public NoPor(No inicializacao, No condicao, No incremento, List<No> corpo) {
+        this.inicializacao = inicializacao;
+        this.condicao = condicao;
+        this.incremento = incremento;
+        this.corpo = corpo;
+    }
+}
+
+// classes e meyodos
+class NoClasse implements No {
+    String nome;
+    List<No> membros;
+    public NoClasse(String nome, List<No> membros) {
+        this.nome = nome;
+        this.membros = membros;
+    }
+}
+
+class NoNovo implements No {
+    String nome;
+    public NoNovo(String nome) {
+        this.nome = nome;
+    }
+}
+
 class NoFuncao implements No {
     String nome;
     List<String> parametros;
@@ -305,7 +370,7 @@ class NoFuncao implements No {
 
 class NoChamadaFuncao implements No {
     String nome;
-    List<No> argumentos;  // Mudança de List<String> para List<No>
+    List<No> argumentos;
 
     public NoChamadaFuncao(String nome, List<No> argumentos) {
         this.nome = nome;
@@ -313,10 +378,14 @@ class NoChamadaFuncao implements No {
     }
 }
 
+class NoRetorne implements No {
+    //...
+}
+
 // condicionais:
 class NoIgualIgual implements No {
     No esquerda, direita;
-	
+
     public NoIgualIgual(No esq, No dir) {
 		this.esquerda = esq;
 		this.direita = dir;
@@ -325,7 +394,7 @@ class NoIgualIgual implements No {
 
 class NoDiferente implements No {
     No esquerda, direita;
-	
+
     public NoDiferente(No esq, No dir) {
 		this.esquerda = esq;
 		this.direita = dir;
@@ -334,7 +403,7 @@ class NoDiferente implements No {
 
 class NoMaior implements No {
     No esquerda, direita;
-	
+
     public NoMaior(No esq, No dir) {
 		this.esquerda = esq;
 		this.direita = dir;
@@ -397,8 +466,12 @@ class AnalisadorSintatico {
 
     private No declaracao() {
 		if(verificar(TipoToken.FUNCAO)) return declaracaoFuncao();
+		if(verificar(TipoToken.RETORNE)) return declaracaoRetorne();
 		if(verificar(TipoToken.VARIAVEL)) return declaracaoVariavel();
 		if(verificar(TipoToken.SE)) return declaracaoCondicional();
+		if(verificar(TipoToken.ENQ)) return declaracaoEnq();
+		if(verificar(TipoToken.POR)) return declaracaoPor();
+		if(verificar(TipoToken.CLASSE)) return declaracaoClasse();
 
 		// Nova verificação para reatribuição
 		if(olhar().tipo == TipoToken.IDENTIFICADOR && 
@@ -413,12 +486,12 @@ class AnalisadorSintatico {
 
 		return chamadaFuncao();
 	}
-	
+
 	private Token olharProximo(int passos) {
 		int posicaoFutura = atual + passos;
 		return posicaoFutura < tokens.size() ? tokens.get(posicaoFutura) : tokens.get(tokens.size()-1);
 	}
-	
+
 	private No lerExpressao() {
 		return lerComparacao();
 	}
@@ -434,22 +507,22 @@ class AnalisadorSintatico {
 			switch(operador) {
 				case IGUAL_IGUAL: 
 					esquerda = new NoIgualIgual(esquerda, direita);
-				break;
+					break;
 				case DIFERENTE:
 					esquerda = new NoDiferente(esquerda, direita);
-				break;
+					break;
 				case MAIOR: 
 					esquerda = new NoMaior(esquerda, direita);
-				break;
+					break;
 				case MENOR: 
 					esquerda = new NoMenor(esquerda, direita);
-				break;
+					break;
 				case MAIOR_IGUAL:
 					esquerda = new NoMaiorIgual(esquerda, direita);
-				break;
+					break;
 				case MENOR_IGUAL:
 					esquerda = new NoMenorIgual(esquerda, direita); 
-				break;
+					break;
 			}
 		}
 		return esquerda;
@@ -476,10 +549,10 @@ class AnalisadorSintatico {
 		No esquerda = lerPrimario();
 
 		while(
-		verificar(TipoToken.MULTIPLICACAO) || 
-		verificar(TipoToken.DIVISAO) || 
-		verificar(TipoToken.PORCENTAGEM)
-		)  {
+			verificar(TipoToken.MULTIPLICACAO) || 
+			verificar(TipoToken.DIVISAO) || 
+			verificar(TipoToken.PORCENTAGEM)
+			)  {
 			TipoToken operador = olhar().tipo;
 			avancar();
 			No direita = lerPrimario();
@@ -487,13 +560,13 @@ class AnalisadorSintatico {
 			switch(operador) {
 				case MULTIPLICACAO:
 					esquerda = new NoMultiplicacao(esquerda, direita);
-				break;
+					break;
 				case DIVISAO:
 					esquerda = new NoDivisao(esquerda, direita);
-				break;
+					break;
 				case PORCENTAGEM:
 					esquerda = new NoPorcentagem(esquerda, direita);
-				break;
+					break;
 			}
 		}
 		return esquerda;
@@ -530,6 +603,70 @@ class AnalisadorSintatico {
 	}
 
 	// declaracoes
+	private No declaracaoEnq() {
+		consumir(TipoToken.ENQ, "Esperado 'enquanto' ou 'enq'");
+		consumir(TipoToken.PARENTESE_ESQ, "Esperado '(' após 'enquanto' ou 'enq'");
+		No condicao = lerExpressao();
+		consumir(TipoToken.PARENTESE_DIR, "Esperado ')' após condição");
+		consumir(TipoToken.CHAVE_ESQ, "Esperado '{' após condição");
+
+		List<No> corpo = new ArrayList<>();
+		while(!verificar(TipoToken.CHAVE_DIR)) {
+			corpo.add(declaracao());
+		}
+		consumir(TipoToken.CHAVE_DIR, "Esperado '}'");
+		return new NoEnq(condicao, corpo);
+	}
+
+	private No declaracaoRetorne() {
+
+		return new NoRetorne();
+	}
+
+	private No declaracaoPor() {
+		consumir(TipoToken.POR, "Esperado 'por'");
+		consumir(TipoToken.PARENTESE_ESQ, "Esperado '(' após 'para'");
+
+		No inicializacao = null;
+		if(!verificar(TipoToken.PONTO_VIRGULA)) {
+			if(verificar(TipoToken.VARIAVEL)) {
+				inicializacao = declaracaoVariavel();
+			} else {
+				inicializacao = declaracao();
+			}
+		}
+		consumir(TipoToken.PONTO_VIRGULA, "Esperado ';'");
+
+		No condicao = lerExpressao();
+		consumir(TipoToken.PONTO_VIRGULA, "Esperado ';'");
+
+		No incremento = lerExpressao();
+		consumir(TipoToken.PARENTESE_DIR, "Esperado ')'");
+		consumir(TipoToken.CHAVE_ESQ, "Esperado '{'");
+
+		List<No> corpo = new ArrayList<>();
+		while(!verificar(TipoToken.CHAVE_DIR)) {
+			corpo.add(declaracao());
+		}
+		consumir(TipoToken.CHAVE_DIR, "Esperado '}'");
+
+		return new NoPor(inicializacao, condicao, incremento, corpo);
+	}
+
+	private No declaracaoClasse() {
+		consumir(TipoToken.CLASSE, "Esperado 'classe'");
+		String nome = consumir(TipoToken.IDENTIFICADOR, "Esperado nome da classe").valor;
+		consumir(TipoToken.CHAVE_ESQ, "Esperado '{'");
+
+		List<No> membros = new ArrayList<>();
+		while(!verificar(TipoToken.CHAVE_DIR)) {
+			membros.add(declaracao());
+		}
+		consumir(TipoToken.CHAVE_DIR, "Esperado '}'");
+
+		return new NoClasse(nome, membros);
+	}
+
 	private No declaracaoVariavel() {
 		consumir(TipoToken.VARIAVEL, "esperado 'var'");
 		String nome = consumir(TipoToken.IDENTIFICADOR, "esperado nome da variavel").valor;
@@ -612,7 +749,7 @@ class AnalisadorSintatico {
     private Token consumir(TipoToken tipo, String mensagemErro) {
         if(verificar(tipo)) return avancar();
         System.err.println(mensagemErro);
-        return new Token(TipoToken.FIM, "");
+        return new Token(TipoToken.FIM, "vazio");
     }
 
     private boolean verificar(TipoToken tipo) {
@@ -655,12 +792,13 @@ class Escopo {
         } else if (pai != null) {
             return pai.obter(nome);
         } else {
-            return ""; // variavel nao encontrada
+            return "vazio"; // variavel nao encontrada
         }
     }
 }
 
 class Interpretador {
+	private final Map<String, NoClasse> classes = new HashMap<>();
     private final Map<String, NoFuncao> funcoes = new HashMap<>();
     private Escopo escopoAtual = new Escopo(null); // escopo global
 
@@ -682,8 +820,28 @@ class Interpretador {
                 escopoAtual.definir(atribuicao.nome, valorResolvido);
             } else if(no instanceof NoChamadaFuncao) {
                 executarChamada((NoChamadaFuncao) no);
-            } else {
-                System.err.println("tipo de nó desconhecido: " + no.getClass().getSimpleName());
+            } else if(no instanceof NoEnq) {
+				NoEnq loop = (NoEnq) no;
+				while(avaliarCondicao(loop.condicao)) {
+					executar(loop.corpo);
+				}
+			}
+			else if(no instanceof NoPor) {
+				NoPor loop = (NoPor) no;
+				if(loop.inicializacao != null) {
+					executar(Collections.singletonList(loop.inicializacao));
+				}
+				while(loop.condicao == null || avaliarCondicao(loop.condicao)) {
+					executar(loop.corpo);
+					if(loop.incremento != null) {
+						resolverValor(loop.incremento);
+					}
+				}
+			} else if(no instanceof NoClasse) {
+				NoClasse classe = (NoClasse) no;
+				classes.put(classe.nome, classe);
+			} else {
+				System.err.println("tipo de nó desconhecido: " + no.getClass().getSimpleName());
             }
         }
     }
@@ -767,7 +925,7 @@ class Interpretador {
 
 		escopoAtual = escopoAnterior;
 	}
-	
+
 	private void executarNativa(NoChamadaFuncao chamada) {
 		// Resolver argumentos antes de passar para a função nativa
 		List<String> argumentosResolvidos = new ArrayList<>();
@@ -779,6 +937,11 @@ class Interpretador {
 			case "log":
 				System.out.println(String.join(" ", argumentosResolvidos));
 				break;
+				// nativo de execucoes:
+			case "Fp.exec":
+				new FP(argumentosResolvidos.get(0));
+				break;
+				// nativo de arquivos:
 			case "criarArquivo":
 				ArquivosUtil.escreverArquivo(
 					argumentosResolvidos.get(0), 
@@ -787,6 +950,9 @@ class Interpretador {
 				break;
 			case "lerArquivo":
 				ArquivosUtil.lerArquivo(argumentosResolvidos.get(0));
+				break;
+            case "execArquivo":
+				new FP(ArquivosUtil.lerArquivo(argumentosResolvidos.get(0)));
 				break;
 			default:
 				System.err.println("funcao nativa desconhecida: " + chamada.nome);
@@ -890,12 +1056,12 @@ class ArquivosUtil {
 		StringBuilder sb = new StringBuilder();
 		try {
 			BufferedReader br = new BufferedReader(new FileReader(caminho));
-				String linha;
-				while((linha = br.readLine()) != null)
-				{
-					sb.append(linha).append("\n");
-				}
-			} catch(Exception e) {
+			String linha;
+			while((linha = br.readLine()) != null)
+			{
+				sb.append(linha).append("\n");
+			}
+		} catch(Exception e) {
 			e.printStackTrace();
 		}
 		return sb.toString();
@@ -909,13 +1075,13 @@ class ArquivosUtil {
             escritor = new FileWriter(new File(caminho), false);
             escritor.write(texto);
             escritor.flush();
-        } catch(IOException e) {
+        } catch(Exception e) {
             e.printStackTrace();
         } finally {
             try {
                 if(escritor != null)
                     escritor.close();
-            } catch(IOException e) {
+            } catch(Exception e) {
                 e.printStackTrace();
             }
         }
@@ -931,3 +1097,5 @@ public class FP {
         new Interpretador().executar(nos);
     }
 }
+
+
