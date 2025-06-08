@@ -12,6 +12,7 @@ import java.io.FileWriter;
 
 enum TipoToken {
     // tipos:
+	BOOL,
     TEX,
 	INT,
 	FLUTU,
@@ -210,6 +211,7 @@ class AnalisadorLexico {
 			valor.equals("func") ? TipoToken.FUNCAO :
 			valor.equals("retorne") ? TipoToken.RETORNE :
 			valor.equals("var") ? TipoToken.VARIAVEL :
+			valor.equals("Bool") ? TipoToken.BOOL :
 			valor.equals("Tex") ? TipoToken.TEX :
 			valor.equals("Flutu") ? TipoToken.FLUTU :
 			valor.equals("Dobro") ? TipoToken.DOBRO :
@@ -233,11 +235,11 @@ class AnalisadorLexico {
 		buffer.setLength(0);
 		char delimitador = codigo.charAt(posicao++); // aspas simples ou dupla
 
-		while (posicao < codigo.length()) {
+		while(posicao < codigo.length()) {
 			char c = codigo.charAt(posicao++);
 
-			if (c == '\\') {
-				if (posicao >= codigo.length()) break; // escape inválido no fim
+			if(c == '\\') {
+				if(posicao >= codigo.length()) break; // escape invalido no fim
 
 				char proximo = codigo.charAt(posicao++);
 				switch (proximo) {
@@ -247,15 +249,14 @@ class AnalisadorLexico {
 					case '\'': buffer.append('\''); break;
 					case '"': buffer.append('"'); break;
 					case '\\': buffer.append('\\'); break;
-					default: buffer.append(proximo); break; // caractere não reconhecido, mantém literal
+					default: buffer.append(proximo); break; // caractere não reconhecido, mantem literal
 				}
-			} else if (c == delimitador) {
+			} else if(c == delimitador) {
 				return new Token(TipoToken.TEX, buffer.toString()); // fim da string
 			} else {
 				buffer.append(c);
 			}
 		}
-
 		throw new RuntimeException("String não fechada");
 	}
 }
@@ -400,6 +401,7 @@ class NoPor implements No {
     No condicao;
     No incremento;
     List<No> corpo;
+	
     public NoPor(No inicializacao, No condicao, No incremento, List<No> corpo) {
         this.inicializacao = inicializacao;
         this.condicao = condicao;
@@ -950,7 +952,7 @@ class Interpretador {
 	}
 
 	private String executarNativa(NoChamadaFuncao chamada) {
-		String ret = "";
+		String ret = "função desconhecida: "+chamada.nome;
 		List<String> argumentosResolvidos = new ArrayList<>();
 		for(No arg : chamada.argumentos) {
 			argumentosResolvidos.add(resolverValor(arg));
@@ -978,7 +980,7 @@ class Interpretador {
 				new FP(ArquivosUtil.lerArquivo(argumentosResolvidos.get(0)));
 				break;
 			default:
-				System.err.println("funcao nativa desconhecida: " + chamada.nome);
+				System.err.println(ret);
 		}
 		return ret;
 	}
@@ -1057,8 +1059,7 @@ class Interpretador {
 	private String executarFuncaoExpressao(NoChamadaFuncao chamada) {
 		NoFuncao func = funcoes.get(chamada.nome);
 		if(func == null) {
-			System.err.println("função não encontrada: " + chamada.nome);
-			return "";
+			return executarNativa(chamada);
 		}
 		
 		Escopo escopoAnterior = escopoAtual;
