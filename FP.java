@@ -12,7 +12,10 @@ import java.io.FileWriter;
 
 enum TipoToken {
     // tipos:
-    STRING,
+    TEX,
+	INT,
+	FLUTU,
+	DOBRO,
     NUMERO,
     // operadores mamaticos:
     ATRIBUICAO,
@@ -49,6 +52,7 @@ enum TipoToken {
 	PONTO,
     VIRGULA, 
     PONTO_VIRGULA,
+	INTERROGACAO,
 	RETORNE,
 	ESTE,
     FIM
@@ -89,7 +93,7 @@ class AnalisadorLexico {
             } else if(Character.isDigit(atual)) {
                 tokens.add(lerNumero());
             } else if(tratarCaracteresSimples(tokens, atual)) {
-            } else if(atual=='"') {
+            } else if(atual=='"' || atual=='\'') {
                 tokens.add(lerString());
             } else {
                 System.err.println("caractere invalido: '"+atual+"' na posicao "+posicao);
@@ -197,7 +201,6 @@ class AnalisadorLexico {
         }
         String valor = buffer.toString();
         return new Token(
-			valor.equals("enquanto") ? TipoToken.ENQ :
 			valor.equals("enq") ? TipoToken.ENQ :
 			valor.equals("por") ? TipoToken.POR :
 			valor.equals("classe") ? TipoToken.CLASSE :
@@ -206,9 +209,11 @@ class AnalisadorLexico {
 			valor.equals("novo") ? TipoToken.NOVO :
 			valor.equals("func") ? TipoToken.FUNCAO :
 			valor.equals("retorne") ? TipoToken.RETORNE :
-			valor.equals("retornar") ? TipoToken.RETORNE :
 			valor.equals("var") ? TipoToken.VARIAVEL :
-			valor.equals("se") ? TipoToken.SE :
+			valor.equals("Tex") ? TipoToken.TEX :
+			valor.equals("Flutu") ? TipoToken.FLUTU :
+			valor.equals("Dobro") ? TipoToken.DOBRO :
+			valor.equals("Int") ? TipoToken.INT :
 			valor.equals("senao") ? TipoToken.SENAO :
 			valor.equals("senão") ? TipoToken.SENAO :
 			TipoToken.IDENTIFICADOR, valor
@@ -225,18 +230,34 @@ class AnalisadorLexico {
     }
 
     private Token lerString() {
-        buffer.setLength(0);
-        posicao++; // pula aspas inicial
-        while(posicao<codigo.length() && codigo.charAt(posicao) != '"') {
-            buffer.append(codigo.charAt(posicao));
-            posicao++;
-        }
-        if(posicao>=codigo.length()) {
-            System.err.println("string nao fechada");
-        }
-        posicao++; // pula aspas final
-        return new Token(TipoToken.STRING, buffer.toString());
-    }
+		buffer.setLength(0);
+		char delimitador = codigo.charAt(posicao++); // aspas simples ou dupla
+
+		while (posicao < codigo.length()) {
+			char c = codigo.charAt(posicao++);
+
+			if (c == '\\') {
+				if (posicao >= codigo.length()) break; // escape inválido no fim
+
+				char proximo = codigo.charAt(posicao++);
+				switch (proximo) {
+					case 'n': buffer.append('\n'); break;
+					case 't': buffer.append('\t'); break;
+					case 'r': buffer.append('\r'); break;
+					case '\'': buffer.append('\''); break;
+					case '"': buffer.append('"'); break;
+					case '\\': buffer.append('\\'); break;
+					default: buffer.append(proximo); break; // caractere não reconhecido, mantém literal
+				}
+			} else if (c == delimitador) {
+				return new Token(TipoToken.TEX, buffer.toString()); // fim da string
+			} else {
+				buffer.append(c);
+			}
+		}
+
+		throw new RuntimeException("String não fechada");
+	}
 }
 
 interface No {}
@@ -317,29 +338,6 @@ class NoVariavel implements No {
 }
 
 // metodos e classe:
-class NoEnq implements No {
-    No condicao;
-    List<No> corpo;
-    public NoEnq(No condicao, List<No> corpo) {
-        this.condicao = condicao;
-        this.corpo = corpo;
-    }
-}
-
-class NoPor implements No {
-    No inicializacao;
-    No condicao;
-    No incremento;
-    List<No> corpo;
-    public NoPor(No inicializacao, No condicao, No incremento, List<No> corpo) {
-        this.inicializacao = inicializacao;
-        this.condicao = condicao;
-        this.incremento = incremento;
-        this.corpo = corpo;
-    }
-}
-
-// classes e meyodos
 class NoClasse implements No {
     String nome;
     List<No> membros;
@@ -379,10 +377,37 @@ class NoChamadaFuncao implements No {
 }
 
 class NoRetorne implements No {
-    //...
+    final No valor;
+
+    public NoRetorne(No valor) {
+        this.valor = valor;
+    }
 }
+	
 
 // condicionais:
+class NoEnq implements No {
+    No condicao;
+    List<No> corpo;
+    public NoEnq(No condicao, List<No> corpo) {
+        this.condicao = condicao;
+        this.corpo = corpo;
+    }
+}
+
+class NoPor implements No {
+    No inicializacao;
+    No condicao;
+    No incremento;
+    List<No> corpo;
+    public NoPor(No inicializacao, No condicao, No incremento, List<No> corpo) {
+        this.inicializacao = inicializacao;
+        this.condicao = condicao;
+        this.incremento = incremento;
+        this.corpo = corpo;
+    }
+}
+
 class NoIgualIgual implements No {
     No esquerda, direita;
 
@@ -473,13 +498,13 @@ class AnalisadorSintatico {
 		if(verificar(TipoToken.POR)) return declaracaoPor();
 		if(verificar(TipoToken.CLASSE)) return declaracaoClasse();
 
-		// Nova verificação para reatribuição
+		//verificação para reatribuição
 		if(olhar().tipo == TipoToken.IDENTIFICADOR && 
 		   olharProximo(1).tipo == TipoToken.ATRIBUICAO) 
 		{
 			Token nome = avancar();
-			avancar(); // Consome o '='
-			No valor = lerExpressao();
+			avancar(); // consome o '='
+			No valor = lerComparacao();
 			consumir(TipoToken.PONTO_VIRGULA, "Esperado ';' após atribuição");
 			return new NoAtribuicao(nome.valor, valor);
 		}
@@ -491,12 +516,29 @@ class AnalisadorSintatico {
 		int posicaoFutura = atual + passos;
 		return posicaoFutura < tokens.size() ? tokens.get(posicaoFutura) : tokens.get(tokens.size()-1);
 	}
-
-	private No lerExpressao() {
-		return lerComparacao();
+	
+	private boolean tokenInicioExpressao(TipoToken tipo) {
+		switch(tipo) {
+			case NUMERO:
+			case TEX:
+			case IDENTIFICADOR:
+			case PARENTESE_ESQ:
+			case SUBTRACAO: // pra numeros negativos
+				return true;
+			default:
+				return false;
+		}
 	}
 
 	private No lerComparacao() {
+		if(fim() || verificar(TipoToken.PARENTESE_DIR) || verificar(TipoToken.CHAVE_DIR)) {
+			return null;
+		}
+
+		if(!tokenInicioExpressao(olhar().tipo)) {
+			return null;
+		}
+
 		No esquerda = lerAdicao();
 
 		while(verificarOperadorComparacao()) {
@@ -506,23 +548,17 @@ class AnalisadorSintatico {
 
 			switch(operador) {
 				case IGUAL_IGUAL: 
-					esquerda = new NoIgualIgual(esquerda, direita);
-					break;
+					esquerda = new NoIgualIgual(esquerda, direita); break;
 				case DIFERENTE:
-					esquerda = new NoDiferente(esquerda, direita);
-					break;
+					esquerda = new NoDiferente(esquerda, direita); break;
 				case MAIOR: 
-					esquerda = new NoMaior(esquerda, direita);
-					break;
+					esquerda = new NoMaior(esquerda, direita); break;
 				case MENOR: 
-					esquerda = new NoMenor(esquerda, direita);
-					break;
+					esquerda = new NoMenor(esquerda, direita); break;
 				case MAIOR_IGUAL:
-					esquerda = new NoMaiorIgual(esquerda, direita);
-					break;
+					esquerda = new NoMaiorIgual(esquerda, direita); break;
 				case MENOR_IGUAL:
-					esquerda = new NoMenorIgual(esquerda, direita); 
-					break;
+					esquerda = new NoMenorIgual(esquerda, direita); break;
 			}
 		}
 		return esquerda;
@@ -575,7 +611,7 @@ class AnalisadorSintatico {
 	private No lerPrimario() {
 		if(verificar(TipoToken.PARENTESE_ESQ)) {
 			avancar();
-			No expressao = lerExpressao();
+			No expressao = lerComparacao();
 			consumir(TipoToken.PARENTESE_DIR, "Esperado ')'");
 			return expressao;
 		}
@@ -593,20 +629,48 @@ class AnalisadorSintatico {
 
 	private No lerTermo() {
 		Token token = olhar();
-		if(token.tipo==TipoToken.NUMERO || token.tipo==TipoToken.STRING || token.tipo==TipoToken.IDENTIFICADOR) {
+		if(token.tipo == TipoToken.IDENTIFICADOR) {
+			// se for IDENTIFICADOR com "(" trata como chamada de função
+			if(olharProximo(1).tipo == TipoToken.PARENTESE_ESQ) {
+				String nomeFunc = avancar().valor; // consome IDENTIFICADOR
+				avancar(); // consome  "("
+				List<No> argumentos = new ArrayList<No>();
+				if(!verificar(TipoToken.PARENTESE_DIR)) {
+					do {
+						argumentos.add(lerComparacao());
+					} while(verificar(TipoToken.VIRGULA) && avancar() != null);
+				}
+				consumir(TipoToken.PARENTESE_DIR, "esperado ')'");
+				return new NoChamadaFuncao(nomeFunc, argumentos);
+			}
+			// caso contrário, é variavel ou literal
 			avancar();
-			return new NoValor(token.valor, token.tipo); // detecta tipo do valor
-		} else {
-			System.err.println("token invalido: " + token.tipo);
-			return null;
+			return new NoValor(token.valor, token.tipo);
+		} else if(token.tipo == TipoToken.NUMERO || token.tipo == TipoToken.TEX) {
+			avancar();
+			return new NoValor(token.valor, token.tipo);
+		} else if(verificar(TipoToken.PARENTESE_ESQ)) {
+			avancar();
+			No expr = lerComparacao();
+			consumir(TipoToken.PARENTESE_DIR, "esperado ')'");
+			return expr;
 		}
+		System.err.println("token inválido em lerTermo(): " + token.tipo);
+		return null;
 	}
 
 	// declaracoes
+	private No declaracaoRetorne() {
+		consumir(TipoToken.RETORNE, "esperado 'retorne'");
+		No exprRetorno = lerComparacao(); // le a expressao a retornar
+		consumir(TipoToken.PONTO_VIRGULA, "esperado ';' após 'retorne'");
+		return new NoRetorne(exprRetorno);
+	}
+	
 	private No declaracaoEnq() {
 		consumir(TipoToken.ENQ, "Esperado 'enquanto' ou 'enq'");
 		consumir(TipoToken.PARENTESE_ESQ, "Esperado '(' após 'enquanto' ou 'enq'");
-		No condicao = lerExpressao();
+		No condicao = lerComparacao();
 		consumir(TipoToken.PARENTESE_DIR, "Esperado ')' após condição");
 		consumir(TipoToken.CHAVE_ESQ, "Esperado '{' após condição");
 
@@ -618,14 +682,13 @@ class AnalisadorSintatico {
 		return new NoEnq(condicao, corpo);
 	}
 
-	private No declaracaoRetorne() {
-
-		return new NoRetorne();
+	private boolean fim() {
+		return atual >= tokens.size();
 	}
 
 	private No declaracaoPor() {
 		consumir(TipoToken.POR, "Esperado 'por'");
-		consumir(TipoToken.PARENTESE_ESQ, "Esperado '(' após 'para'");
+		consumir(TipoToken.PARENTESE_ESQ, "Esperado '(' após 'por'");
 
 		No inicializacao = null;
 		if(!verificar(TipoToken.PONTO_VIRGULA)) {
@@ -634,18 +697,24 @@ class AnalisadorSintatico {
 			} else {
 				inicializacao = declaracao();
 			}
+		} else {
+			avancar(); // consome ';' vazio
 		}
-		consumir(TipoToken.PONTO_VIRGULA, "Esperado ';'");
 
-		No condicao = lerExpressao();
-		consumir(TipoToken.PONTO_VIRGULA, "Esperado ';'");
+		No condicao = null;
+		if(!verificar(TipoToken.PONTO_VIRGULA)) {
+			condicao = lerComparacao();
+		}
+		
+		No incremento = null;
+		if(!verificar(TipoToken.PARENTESE_DIR)) {
+			incremento = lerComparacao();
+		}
+		consumir(TipoToken.PARENTESE_DIR, "Esperado ')' após incremento");
+		consumir(TipoToken.CHAVE_ESQ, "Esperado '{' após ')'");
 
-		No incremento = lerExpressao();
-		consumir(TipoToken.PARENTESE_DIR, "Esperado ')'");
-		consumir(TipoToken.CHAVE_ESQ, "Esperado '{'");
-
-		List<No> corpo = new ArrayList<>();
-		while(!verificar(TipoToken.CHAVE_DIR)) {
+		List<No> corpo = new ArrayList<No>();
+		while(!verificar(TipoToken.CHAVE_DIR) && !fim()) {
 			corpo.add(declaracao());
 		}
 		consumir(TipoToken.CHAVE_DIR, "Esperado '}'");
@@ -671,7 +740,7 @@ class AnalisadorSintatico {
 		consumir(TipoToken.VARIAVEL, "esperado 'var'");
 		String nome = consumir(TipoToken.IDENTIFICADOR, "esperado nome da variavel").valor;
 		consumir(TipoToken.ATRIBUICAO, "esperado '=' após nome da variável");
-		No expressao = lerExpressao(); // le expressoes complexas
+		No expressao = lerComparacao(); // le expressoes complexas
 		consumir(TipoToken.PONTO_VIRGULA, "esperado ';' após valor da variavel");
 		return new NoAtribuicao(nome, expressao);
 	}
@@ -706,7 +775,7 @@ class AnalisadorSintatico {
 
 		List<No> argumentos = new ArrayList<>();
 		while(!verificar(TipoToken.PARENTESE_DIR)) {
-			argumentos.add(lerExpressao());
+			argumentos.add(lerComparacao());
 			if(!verificar(TipoToken.PARENTESE_DIR)) {
 				consumir(TipoToken.VIRGULA, "esperado ',' entre argumentos");
 			}
@@ -720,7 +789,7 @@ class AnalisadorSintatico {
 	private No declaracaoCondicional() {
 		consumir(TipoToken.SE, "Esperado 'se'");
 		consumir(TipoToken.PARENTESE_ESQ, "Esperado '(' após 'se'");
-		No condicao = lerExpressao();
+		No condicao = lerComparacao();
 		consumir(TipoToken.PARENTESE_DIR, "Esperado ')' após condição");
 		consumir(TipoToken.CHAVE_ESQ, "Esperado '{' após condição");
 
@@ -789,10 +858,10 @@ class Escopo {
     public String obter(String nome) {
         if(variaveis.containsKey(nome)) {
             return variaveis.get(nome);
-        } else if (pai != null) {
+        } else if(pai != null) {
             return pai.obter(nome);
         } else {
-            return "vazio"; // variavel nao encontrada
+            return " vazio"; // variavel nao encontrada
         }
     }
 }
@@ -825,8 +894,7 @@ class Interpretador {
 				while(avaliarCondicao(loop.condicao)) {
 					executar(loop.corpo);
 				}
-			}
-			else if(no instanceof NoPor) {
+			} else if(no instanceof NoPor) {
 				NoPor loop = (NoPor) no;
 				if(loop.inicializacao != null) {
 					executar(Collections.singletonList(loop.inicializacao));
@@ -881,53 +949,8 @@ class Interpretador {
 		return false;
 	}
 
-    private void executarChamada(NoChamadaFuncao chamada) {
-        if(funcoes.containsKey(chamada.nome)) {
-            executarFuncao(chamada);
-        } else {
-            executarNativa(chamada);
-        }
-    }
-
-    private void executarFuncao(NoChamadaFuncao chamada) {
-		NoFuncao funcao = funcoes.get(chamada.nome);
-		if(funcao == null) {
-			System.err.println("funcao nao encontrada: " + chamada.nome);
-			return;
-		}
-
-		Escopo escopoAnterior = escopoAtual;
-		escopoAtual = new Escopo(escopoAnterior);
-
-		// Resolver valores dos argumentos antes de passar para a função
-		for(int i = 0; i < funcao.parametros.size(); i++) {
-			String valorResolvido = resolverValor(chamada.argumentos.get(i));
-			escopoAtual.definir(funcao.parametros.get(i), valorResolvido);
-		}
-
-		for(No no : funcao.corpo) {
-			if(no instanceof NoChamadaFuncao) {
-				executarChamada((NoChamadaFuncao) no);
-			} else if(no instanceof NoAtribuicao) {
-				NoAtribuicao atribuicao = (NoAtribuicao) no;
-				String valorResolvido = resolverValor(atribuicao.valor);
-				escopoAtual.definir(atribuicao.nome, valorResolvido);
-			} else if(no instanceof NoCondicional) {
-				NoCondicional cond = (NoCondicional) no;
-				boolean resultado = avaliarCondicao(cond.condicao);
-				if(resultado) {
-					executar(cond.blocoSe);
-				} else if(!cond.blocoSenao.isEmpty()) {
-					executar(cond.blocoSenao);
-				}
-			}
-		}
-
-		escopoAtual = escopoAnterior;
-	}
-
-	private void executarNativa(NoChamadaFuncao chamada) {
-		// Resolver argumentos antes de passar para a função nativa
+	private String executarNativa(NoChamadaFuncao chamada) {
+		String ret = "";
 		List<String> argumentosResolvidos = new ArrayList<>();
 		for(No arg : chamada.argumentos) {
 			argumentosResolvidos.add(resolverValor(arg));
@@ -938,7 +961,7 @@ class Interpretador {
 				System.out.println(String.join(" ", argumentosResolvidos));
 				break;
 				// nativo de execucoes:
-			case "Fp.exec":
+			case "FPexec":
 				new FP(argumentosResolvidos.get(0));
 				break;
 				// nativo de arquivos:
@@ -949,7 +972,7 @@ class Interpretador {
 				);
 				break;
 			case "lerArquivo":
-				ArquivosUtil.lerArquivo(argumentosResolvidos.get(0));
+				ret = ArquivosUtil.lerArquivo(argumentosResolvidos.get(0));
 				break;
             case "execArquivo":
 				new FP(ArquivosUtil.lerArquivo(argumentosResolvidos.get(0)));
@@ -957,70 +980,150 @@ class Interpretador {
 			default:
 				System.err.println("funcao nativa desconhecida: " + chamada.nome);
 		}
+		return ret;
 	}
 
     private String resolverValor(No no) {
 		if(no instanceof NoValor) {
-			NoValor valor = (NoValor) no;
-			if(valor.tipo==TipoToken.IDENTIFICADOR) {
-				return escopoAtual.obter(valor.valor); // busca variavel no escopo certo
+			NoValor v = (NoValor) no;
+			if(v.tipo == TipoToken.IDENTIFICADOR) {
+				return escopoAtual.obter(v.valor);
 			}
-			return valor.valor;
+			return v.valor;
+		} else if(no instanceof NoChamadaFuncao) {
+			return executarFuncaoExpressao((NoChamadaFuncao) no);
 		} else if(no instanceof NoAdicao) {
-			NoAdicao adicao = (NoAdicao) no;
-			String val1 = resolverValor(adicao.esquerda);
-			String val2 = resolverValor(adicao.direita);
-
+			NoAdicao n = (NoAdicao) no;
+			String e = resolverValor(n.esquerda);
+			String d = resolverValor(n.direita);
 			try {
-				return String.valueOf(Float.parseFloat(val1) + Float.parseFloat(val2));
-			} catch(NumberFormatException e) {
-				return val1 + val2; // string + string
+				return String.valueOf(
+					Float.parseFloat(e) + Float.parseFloat(d)
+				);
+			} catch(NumberFormatException e1) {
+				return e + d;
 			}
-		} else if(no instanceof NoSubtracao) {
-			NoSubtracao subtracao = (NoSubtracao) no;
-			String val1 = resolverValor(subtracao.esquerda);
-			String val2 = resolverValor(subtracao.direita);
-
+		} else if (no instanceof NoSubtracao) {
+			NoSubtracao n = (NoSubtracao) no;
+			String e = resolverValor(n.esquerda);
+			String d = resolverValor(n.direita);
 			try {
-				return String.valueOf(Float.parseFloat(val1) - Float.parseFloat(val2));
-			} catch(NumberFormatException e) {
-				return val1.replace(val2, ""); // string - string
+				return String.valueOf(
+					Float.parseFloat(e) - Float.parseFloat(d)
+				);
+			} catch(NumberFormatException e1) {
+				return e.replace(d, "");
 			}
 		} else if(no instanceof NoMultiplicacao) {
-			NoMultiplicacao multiplicacao = (NoMultiplicacao) no;
-			String val1 = resolverValor(multiplicacao.esquerda);
-			String val2 = resolverValor(multiplicacao.direita);
-
+			NoMultiplicacao n = (NoMultiplicacao) no;
+			String e = resolverValor(n.esquerda);
+			String d = resolverValor(n.direita);
 			try {
-				return String.valueOf(Float.parseFloat(val1) * Float.parseFloat(val2));
-			} catch(NumberFormatException e) {
-				System.err.println("erro: nao é possivel multiplicar strings.");
+				return String.valueOf(
+					Float.parseFloat(e) * Float.parseFloat(d)
+				);
+			} catch(NumberFormatException e1) {
+				System.err.println("erro: não é possível multiplicar strings.");
 				return "";
 			}
 		} else if(no instanceof NoDivisao) {
-			NoDivisao divisao = (NoDivisao) no;
-			String val1 = resolverValor(divisao.esquerda);
-			String val2 = resolverValor(divisao.direita);
-
+			NoDivisao n = (NoDivisao) no;
+			String e = resolverValor(n.esquerda);
+			String d = resolverValor(n.direita);
 			try {
-				return String.valueOf(Float.parseFloat(val1) / Float.parseFloat(val2));
-			} catch(NumberFormatException e) {
-				System.err.println("erro: nao é possivel dividir strings.");
+				return String.valueOf(
+					Float.parseFloat(e) / Float.parseFloat(d)
+				);
+			} catch(NumberFormatException e1) {
+				System.err.println("erro: não é possível dividir strings.");
 				return "";
 			}
 		} else if(no instanceof NoPorcentagem) {
-			NoPorcentagem porcentagem = (NoPorcentagem) no;
-			String val1 = resolverValor(porcentagem.esquerda);
-			String val2 = resolverValor(porcentagem.direita);
-
+			NoPorcentagem n = (NoPorcentagem) no;
+			String e = resolverValor(n.esquerda);
+			String d = resolverValor(n.direita);
 			try {
-				return String.valueOf(Float.parseFloat(val1) % Float.parseFloat(val2));
-			} catch(NumberFormatException e) {
-				System.err.println("erro: nao é possível calcular porcentagem de strings.");
+				return String.valueOf(
+					Float.parseFloat(e) % Float.parseFloat(d)
+				);
+			} catch(NumberFormatException e1) {
+				System.err.println("erro: não é possível calcular porcentagem de strings.");
 				return "";
 			}
 		}
 		return "";
+	}
+
+	private String executarFuncaoExpressao(NoChamadaFuncao chamada) {
+		NoFuncao func = funcoes.get(chamada.nome);
+		if(func == null) {
+			System.err.println("função não encontrada: " + chamada.nome);
+			return "";
+		}
+		
+		Escopo escopoAnterior = escopoAtual;
+		escopoAtual = new Escopo(escopoAnterior);
+		// define parâmetros
+		for(int i = 0; i < func.parametros.size(); i++) {
+			String val = resolverValor(chamada.argumentos.get(i));
+			escopoAtual.definir(func.parametros.get(i), val);
+		}
+		
+		String valorRet = "";
+		for(No no : func.corpo) {
+			if(no instanceof NoRetorne) {
+				valorRet = resolverValor(((NoRetorne) no).valor);
+				break;
+			} else if(no instanceof NoAtribuicao) {
+				NoAtribuicao atr = (NoAtribuicao) no;
+				String vr = resolverValor(atr.valor);
+				escopoAtual.definir(atr.nome, vr);
+			} else if(no instanceof NoChamadaFuncao) {
+				NoChamadaFuncao chama = (NoChamadaFuncao) no;
+				if(funcoes.containsKey(chama.nome)) {
+					executarFuncaoExpressao(chama);
+				} else {
+					valorRet = executarNativa(chama);
+					break;
+				}
+			} else if(no instanceof NoCondicional) {
+				NoCondicional cond = (NoCondicional) no;
+				boolean res = avaliarCondicao(cond.condicao);
+				if(res) {
+					for(No sub : cond.blocoSe) {
+						if(sub instanceof NoRetorne) {
+							valorRet = resolverValor(((NoRetorne) sub).valor);
+							break;
+						} else if(sub instanceof NoAtribuicao) {
+							NoAtribuicao a2 = (NoAtribuicao) sub;
+							escopoAtual.definir(a2.nome, resolverValor(a2.valor));
+						}
+					}
+					if(!valorRet.isEmpty()) break;
+				} else {
+					for(No sub : cond.blocoSenao) {
+						if(sub instanceof NoRetorne) {
+							valorRet = resolverValor(((NoRetorne) sub).valor);
+							break;
+						} else if(sub instanceof NoAtribuicao) {
+							NoAtribuicao a2 = (NoAtribuicao) sub;
+							escopoAtual.definir(a2.nome, resolverValor(a2.valor));
+						}
+					}
+					if(!valorRet.isEmpty()) break;
+				}
+			}
+		}
+		escopoAtual = escopoAnterior;
+		return valorRet;
+	}
+
+	private void executarChamada(NoChamadaFuncao chamada) {
+		if(funcoes.containsKey(chamada.nome)) {
+			executarFuncaoExpressao(chamada);
+		} else {
+			executarNativa(chamada);
+		}
 	}
 }
 
