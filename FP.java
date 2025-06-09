@@ -9,6 +9,7 @@ import java.io.File;
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.FileWriter;
+import android.os.Environment;
 
 enum TipoToken {
     // tipos:
@@ -56,6 +57,8 @@ enum TipoToken {
 	INTERROGACAO,
 	RETORNE,
 	ESTE,
+	FALSO,
+	VERDADE,
     FIM
 	}
 
@@ -205,17 +208,19 @@ class AnalisadorLexico {
 			valor.equals("enq") ? TipoToken.ENQ :
 			valor.equals("por") ? TipoToken.POR :
 			valor.equals("classe") ? TipoToken.CLASSE :
-			valor.equals("novo") ? TipoToken.NOVO :
 			valor.equals("este") ? TipoToken.ESTE :
 			valor.equals("novo") ? TipoToken.NOVO :
 			valor.equals("func") ? TipoToken.FUNCAO :
 			valor.equals("retorne") ? TipoToken.RETORNE :
 			valor.equals("var") ? TipoToken.VARIAVEL :
 			valor.equals("Bool") ? TipoToken.BOOL :
+			valor.equals("falso") ? TipoToken.FALSO :
+			valor.equals("verdade") ? TipoToken.VERDADE :
 			valor.equals("Tex") ? TipoToken.TEX :
 			valor.equals("Flutu") ? TipoToken.FLUTU :
 			valor.equals("Dobro") ? TipoToken.DOBRO :
 			valor.equals("Int") ? TipoToken.INT :
+			valor.equals("se") ? TipoToken.SE :
 			valor.equals("senao") ? TipoToken.SENAO :
 			valor.equals("senão") ? TipoToken.SENAO :
 			TipoToken.IDENTIFICADOR, valor
@@ -223,13 +228,27 @@ class AnalisadorLexico {
     }
 
     private Token lerNumero() {
-        buffer.setLength(0);
-        while(posicao < codigo.length() && Character.isDigit(codigo.charAt(posicao))) {
-            buffer.append(codigo.charAt(posicao));
-            posicao++;
-        }
-        return new Token(TipoToken.NUMERO, buffer.toString());
-    }
+		buffer.setLength(0);
+		boolean temPonto = false;
+
+		while(posicao < codigo.length()) {
+			char c = codigo.charAt(posicao);
+
+			if(Character.isDigit(c)) {
+				buffer.append(c);
+				posicao++;
+			} else if(c == '.' && !temPonto && (posicao + 1 < codigo.length() && Character.isDigit(codigo.charAt(posicao + 1)))) {
+				temPonto = true;
+				buffer.append(c);
+				posicao++;
+			} else {
+				break;
+			}
+		}
+
+		String valor = buffer.toString();
+		return new Token(TipoToken.NUMERO, valor);
+	}
 
     private Token lerString() {
 		buffer.setLength(0);
@@ -242,7 +261,7 @@ class AnalisadorLexico {
 				if(posicao >= codigo.length()) break; // escape invalido no fim
 
 				char proximo = codigo.charAt(posicao++);
-				switch (proximo) {
+				switch(proximo) {
 					case 'n': buffer.append('\n'); break;
 					case 't': buffer.append('\t'); break;
 					case 'r': buffer.append('\r'); break;
@@ -266,10 +285,12 @@ interface No {}
 // operadores:
 class NoAtribuicao implements No {
     String nome;
+    TipoToken tipoDeclarado;
     No valor;
 
-    public NoAtribuicao(String nome, No valor) {
+    public NoAtribuicao(String nome, TipoToken tipoDeclarado, No valor) {
         this.nome = nome;
+        this.tipoDeclarado = tipoDeclarado;
         this.valor = valor;
     }
 }
@@ -384,7 +405,6 @@ class NoRetorne implements No {
         this.valor = valor;
     }
 }
-	
 
 // condicionais:
 class NoEnq implements No {
@@ -468,6 +488,7 @@ class NoCondicional implements No {
     No condicao;
     List<No> blocoSe;
     List<No> blocoSenao;
+	
     public NoCondicional(No cond, List<No> se, List<No> senao) {
         this.condicao = cond;
         this.blocoSe = se;
@@ -495,6 +516,11 @@ class AnalisadorSintatico {
 		if(verificar(TipoToken.FUNCAO)) return declaracaoFuncao();
 		if(verificar(TipoToken.RETORNE)) return declaracaoRetorne();
 		if(verificar(TipoToken.VARIAVEL)) return declaracaoVariavel();
+		if(verificar(TipoToken.BOOL)) return declaracaoVariavel();
+		if(verificar(TipoToken.TEX)) return declaracaoVariavel();
+		if(verificar(TipoToken.INT)) return declaracaoVariavel();
+		if(verificar(TipoToken.FLUTU)) return declaracaoVariavel();
+		if(verificar(TipoToken.DOBRO)) return declaracaoVariavel();
 		if(verificar(TipoToken.SE)) return declaracaoCondicional();
 		if(verificar(TipoToken.ENQ)) return declaracaoEnq();
 		if(verificar(TipoToken.POR)) return declaracaoPor();
@@ -502,13 +528,12 @@ class AnalisadorSintatico {
 
 		//verificação para reatribuição
 		if(olhar().tipo == TipoToken.IDENTIFICADOR && 
-		   olharProximo(1).tipo == TipoToken.ATRIBUICAO) 
-		{
+		   olharProximo(1).tipo == TipoToken.ATRIBUICAO) {
 			Token nome = avancar();
 			avancar(); // consome o '='
 			No valor = lerComparacao();
 			consumir(TipoToken.PONTO_VIRGULA, "Esperado ';' após atribuição");
-			return new NoAtribuicao(nome.valor, valor);
+			return new NoAtribuicao(nome.valor, null, valor); // Tipo null
 		}
 
 		return chamadaFuncao();
@@ -739,12 +764,20 @@ class AnalisadorSintatico {
 	}
 
 	private No declaracaoVariavel() {
-		consumir(TipoToken.VARIAVEL, "esperado 'var'");
+		Token tokenTipo = olhar(); // captura o token do tipo
+		avancar(); // consome o token do tipo
+
 		String nome = consumir(TipoToken.IDENTIFICADOR, "esperado nome da variavel").valor;
 		consumir(TipoToken.ATRIBUICAO, "esperado '=' após nome da variável");
-		No expressao = lerComparacao(); // le expressoes complexas
+		No expressao = lerComparacao();
 		consumir(TipoToken.PONTO_VIRGULA, "esperado ';' após valor da variavel");
-		return new NoAtribuicao(nome, expressao);
+
+		// define o tipo (null para 'var')
+		TipoToken tipoDeclarado = (tokenTipo.tipo != TipoToken.VARIAVEL) 
+			? tokenTipo.tipo 
+			: null;
+
+		return new NoAtribuicao(nome, tipoDeclarado, expressao);
 	}
 
     private No declaracaoFuncao() {
@@ -889,7 +922,7 @@ class Interpretador {
                 NoAtribuicao atribuicao = (NoAtribuicao) no;
                 String valorResolvido = resolverValor(atribuicao.valor);
                 escopoAtual.definir(atribuicao.nome, valorResolvido);
-            } else if(no instanceof NoChamadaFuncao) {
+			} else if(no instanceof NoChamadaFuncao) {
                 executarChamada((NoChamadaFuncao) no);
             } else if(no instanceof NoEnq) {
 				NoEnq loop = (NoEnq) no;
@@ -917,6 +950,12 @@ class Interpretador {
     }
 
 	private boolean avaliarCondicao(No condicao) {
+		if(condicao instanceof NoChamadaFuncao) {
+			NoIgualIgual op = (NoIgualIgual) condicao;
+			String valEsq = resolverValor(op.esquerda);
+			String valDir = resolverValor(op.direita);
+			return valEsq.equals(valDir);
+		}
 		if(condicao instanceof NoIgualIgual) {
 			NoIgualIgual op = (NoIgualIgual) condicao;
 			String valEsq = resolverValor(op.esquerda);
@@ -948,112 +987,213 @@ class Interpretador {
 			float valDir = Float.parseFloat(resolverValor(op.direita));
 			return valEsq <= valDir;
 		}
+		if(condicao instanceof NoChamadaFuncao) {
+            String r = resolverValor(condicao);
+            if("verdade".equals(r)) return true;
+            if("falso".equals(r)) return false;
+            try {
+                return Double.parseDouble(r) != 0;
+            } catch(Exception ex) {
+                return !r.isEmpty();
+            }
+        }
+		if(condicao instanceof NoValor) {
+            NoValor v = (NoValor) condicao;
+            String s = v.valor;
+            if(v.tipo == TipoToken.TEX) {
+                return !s.isEmpty();
+            }
+            if(v.tipo == TipoToken.NUMERO) {
+                try {
+                    return Double.parseDouble(s) != 0;
+                } catch(Exception ex) {
+                    return false;
+                }
+            }
+            return false;
+        }
 		return false;
 	}
 
 	private String executarNativa(NoChamadaFuncao chamada) {
-		String ret = "função desconhecida: "+chamada.nome;
-		List<String> argumentosResolvidos = new ArrayList<>();
-		for(No arg : chamada.argumentos) {
-			argumentosResolvidos.add(resolverValor(arg));
-		}
-
-		switch(chamada.nome) {
-			case "log":
-				System.out.println(String.join(" ", argumentosResolvidos));
-				break;
-				// nativo de execucoes:
-			case "FPexec":
-				new FP(argumentosResolvidos.get(0));
-				break;
-				// nativo de arquivos:
-			case "criarArquivo":
-				ArquivosUtil.escreverArquivo(
-					argumentosResolvidos.get(0), 
-					argumentosResolvidos.get(1)
-				);
-				break;
-			case "lerArquivo":
-				ret = ArquivosUtil.lerArquivo(argumentosResolvidos.get(0));
-				break;
-            case "execArquivo":
-				new FP(ArquivosUtil.lerArquivo(argumentosResolvidos.get(0)));
-				break;
-			default:
-				System.err.println(ret);
+		String ret = "função desconhecida: " + chamada.nome;
+		List<String> args = new ArrayList<String>();
+		for (No arg : chamada.argumentos) args.add(resolverValor(arg));
+		// comum:
+		if("log".equals(chamada.nome)) {
+			System.out.println(String.join(" ", args));
+		} else if("FPexec".equals(chamada.nome)) {
+			new FP(args.get(0));
+		// mamatica:
+		} else if("mPI".equals(chamada.nome)) {
+			return "3.141592653589793";
+		} else if("mAbs".equals(chamada.nome)) {
+			return String.valueOf(Math.abs(Double.parseDouble(args.get(0))));
+		} else if("mAleatorio".equals(chamada.nome)) {
+			return String.valueOf(Math.random());
+		} else if("mSen".equals(chamada.nome)) {
+			return String.valueOf(Math.sin(Double.parseDouble(args.get(0))));
+		} else if("mCos".equals(chamada.nome)) {
+			return String.valueOf(Math.cos(Double.parseDouble(args.get(0))));
+		// armazenamento:
+		} else if("obExterno".equals(chamada.nome)) {
+			return Environment.getExternalStorageDirectory().toString();
+		} else if("gravarArquivo".equals(chamada.nome)) {
+			ArquivosUtil.escreverArquivo(args.get(0), args.get(1));
+		} else if("lerArquivo".equals(chamada.nome)) {
+			return ArquivosUtil.lerArquivo(args.get(0));
+		} else if("execArquivo".equals(chamada.nome)) {
+			new FP(ArquivosUtil.lerArquivo(args.get(0)));
+		} else {
+			System.err.println(ret);
 		}
 		return ret;
 	}
 
     private String resolverValor(No no) {
-		if(no instanceof NoValor) {
-			NoValor v = (NoValor) no;
-			if(v.tipo == TipoToken.IDENTIFICADOR) {
-				return escopoAtual.obter(v.valor);
+        if(no instanceof NoValor) {
+            NoValor v = (NoValor) no;
+            if(v.tipo == TipoToken.IDENTIFICADOR) {
+                return escopoAtual.obter(v.valor);
+            }
+            return v.valor;
+        }
+        if(no instanceof NoChamadaFuncao) {
+            return executarFuncaoExpressao((NoChamadaFuncao) no);
+        }
+        if(no instanceof NoAdicao) {
+            NoAdicao n = (NoAdicao) no;
+            String e = resolverValor(n.esquerda);
+            String d = resolverValor(n.direita);
+            try {
+                return String.valueOf(Integer.parseInt(e) + Integer.parseInt(d));
+            } catch(Exception ex1) {
+                try {
+                    return String.valueOf(Long.parseLong(e) + Long.parseLong(d));
+                } catch(Exception ex2) {
+                    try {
+                        return String.valueOf(Float.parseFloat(e) + Float.parseFloat(d));
+                    } catch(Exception ex3) {
+                        try {
+                            return String.valueOf(Double.parseDouble(e) + Double.parseDouble(d));
+                        } catch(Exception ex4) {
+                            return e + d;
+                        }
+                    }
+                }
+            }
+        }
+        if(no instanceof NoSubtracao) {
+            NoSubtracao n = (NoSubtracao) no;
+            String e = resolverValor(n.esquerda);
+            String d = resolverValor(n.direita);
+            try {
+                return String.valueOf(Integer.parseInt(e) - Integer.parseInt(d));
+            } catch(Exception ex1) {
+                try {
+                    return String.valueOf(Long.parseLong(e) - Long.parseLong(d));
+                } catch(Exception ex2) {
+                    try {
+                        return String.valueOf(Float.parseFloat(e) - Float.parseFloat(d));
+                    } catch(Exception ex3) {
+                        try {
+                            return String.valueOf(Double.parseDouble(e) - Double.parseDouble(d));
+                        } catch(Exception ex4) {
+                            return "";
+                        }
+                    }
+                }
+            }
+        }
+        if(no instanceof NoMultiplicacao) {
+            NoMultiplicacao n = (NoMultiplicacao) no;
+            String e = resolverValor(n.esquerda);
+            String d = resolverValor(n.direita);
+            try {
+                return String.valueOf(Integer.parseInt(e) * Integer.parseInt(d));
+            } catch(Exception ex1) {
+                try {
+                    return String.valueOf(Long.parseLong(e) * Long.parseLong(d));
+                } catch(Exception ex2) {
+                    try {
+                        return String.valueOf(Float.parseFloat(e) * Float.parseFloat(d));
+                    } catch(Exception ex3) {
+                        try {
+                            return String.valueOf(Double.parseDouble(e) * Double.parseDouble(d));
+                        } catch(Exception ex4) {
+                            return "";
+                        }
+                    }
+                }
+            }
+        }
+        if(no instanceof NoDivisao) {
+            NoDivisao n = (NoDivisao) no;
+            String e = resolverValor(n.esquerda);
+            String d = resolverValor(n.direita);
+            try {
+                return String.valueOf(Integer.parseInt(e) / Integer.parseInt(d));
+            } catch(Exception ex1) {
+                try {
+                    return String.valueOf(Long.parseLong(e) / Long.parseLong(d));
+                } catch(Exception ex2) {
+                    try {
+                        return String.valueOf(Float.parseFloat(e) / Float.parseFloat(d));
+                    } catch(Exception ex3) {
+                        try {
+                            return String.valueOf(Double.parseDouble(e) / Double.parseDouble(d));
+                        } catch(Exception ex4) {
+                            return "";
+                        }
+                    }
+                }
+            }
+        }
+        if (no instanceof NoPorcentagem) {
+            NoPorcentagem n = (NoPorcentagem) no;
+            String e = resolverValor(n.esquerda);
+            String d = resolverValor(n.direita);
+            try {
+                return String.valueOf(Integer.parseInt(e) % Integer.parseInt(d));
+            } catch (Exception ex1) {
+                try {
+                    return String.valueOf(Long.parseLong(e) % Long.parseLong(d));
+                } catch(Exception ex2) {
+                    try {
+                        return String.valueOf(Float.parseFloat(e) % Float.parseFloat(d));
+                    } catch (Exception ex3) {
+                        try {
+                            return String.valueOf(Double.parseDouble(e) % Double.parseDouble(d));
+                        } catch(Exception ex4) {
+                            return "";
+                        }
+                    }
+                }
+            }
+        }
+        return "";
+    }
+	
+	private boolean validarTipo(String valor, TipoToken tipo) {
+		try {
+			switch(tipo) {
+				case BOOL:
+					return valor == "verdade" || valor == "falso";
+				case INT:
+					Integer.parseInt(valor);
+					return true;
+				case FLUTU:
+				case DOBRO:
+					Float.parseFloat(valor);
+					return true;
+				case TEX:
+					return true; // qualquer string é valida
+				default:
+					return false;
 			}
-			return v.valor;
-		} else if(no instanceof NoChamadaFuncao) {
-			return executarFuncaoExpressao((NoChamadaFuncao) no);
-		} else if(no instanceof NoAdicao) {
-			NoAdicao n = (NoAdicao) no;
-			String e = resolverValor(n.esquerda);
-			String d = resolverValor(n.direita);
-			try {
-				return String.valueOf(
-					Float.parseFloat(e) + Float.parseFloat(d)
-				);
-			} catch(NumberFormatException e1) {
-				return e + d;
-			}
-		} else if (no instanceof NoSubtracao) {
-			NoSubtracao n = (NoSubtracao) no;
-			String e = resolverValor(n.esquerda);
-			String d = resolverValor(n.direita);
-			try {
-				return String.valueOf(
-					Float.parseFloat(e) - Float.parseFloat(d)
-				);
-			} catch(NumberFormatException e1) {
-				return e.replace(d, "");
-			}
-		} else if(no instanceof NoMultiplicacao) {
-			NoMultiplicacao n = (NoMultiplicacao) no;
-			String e = resolverValor(n.esquerda);
-			String d = resolverValor(n.direita);
-			try {
-				return String.valueOf(
-					Float.parseFloat(e) * Float.parseFloat(d)
-				);
-			} catch(NumberFormatException e1) {
-				System.err.println("erro: não é possível multiplicar strings.");
-				return "";
-			}
-		} else if(no instanceof NoDivisao) {
-			NoDivisao n = (NoDivisao) no;
-			String e = resolverValor(n.esquerda);
-			String d = resolverValor(n.direita);
-			try {
-				return String.valueOf(
-					Float.parseFloat(e) / Float.parseFloat(d)
-				);
-			} catch(NumberFormatException e1) {
-				System.err.println("erro: não é possível dividir strings.");
-				return "";
-			}
-		} else if(no instanceof NoPorcentagem) {
-			NoPorcentagem n = (NoPorcentagem) no;
-			String e = resolverValor(n.esquerda);
-			String d = resolverValor(n.direita);
-			try {
-				return String.valueOf(
-					Float.parseFloat(e) % Float.parseFloat(d)
-				);
-			} catch(NumberFormatException e1) {
-				System.err.println("erro: não é possível calcular porcentagem de strings.");
-				return "";
-			}
+		} catch(NumberFormatException e) {
+			return false;
 		}
-		return "";
 	}
 
 	private String executarFuncaoExpressao(NoChamadaFuncao chamada) {
@@ -1076,17 +1216,22 @@ class Interpretador {
 				valorRet = resolverValor(((NoRetorne) no).valor);
 				break;
 			} else if(no instanceof NoAtribuicao) {
-				NoAtribuicao atr = (NoAtribuicao) no;
-				String vr = resolverValor(atr.valor);
-				escopoAtual.definir(atr.nome, vr);
+				NoAtribuicao atribuicao = (NoAtribuicao) no;
+				String valorResolvido = resolverValor(atribuicao.valor);
+				
+				// validação de tipo
+				if(atribuicao.tipoDeclarado != null) {
+					if(!validarTipo(valorResolvido, atribuicao.tipoDeclarado)) {
+						System.err.println(
+						"erro de tipo: " + atribuicao.nome + 
+						" esperava " + atribuicao.tipoDeclarado + 
+						", recebeu: " + valorResolvido);
+						continue;
+					}
+				} 
+				escopoAtual.definir(atribuicao.nome, valorResolvido);
 			} else if(no instanceof NoChamadaFuncao) {
-				NoChamadaFuncao chama = (NoChamadaFuncao) no;
-				if(funcoes.containsKey(chama.nome)) {
-					executarFuncaoExpressao(chama);
-				} else {
-					valorRet = executarNativa(chama);
-					break;
-				}
+				executarChamada((NoChamadaFuncao) no);
 			} else if(no instanceof NoCondicional) {
 				NoCondicional cond = (NoCondicional) no;
 				boolean res = avaliarCondicao(cond.condicao);
@@ -1098,6 +1243,8 @@ class Interpretador {
 						} else if(sub instanceof NoAtribuicao) {
 							NoAtribuicao a2 = (NoAtribuicao) sub;
 							escopoAtual.definir(a2.nome, resolverValor(a2.valor));
+						} else if(sub instanceof NoChamadaFuncao) {
+							executarChamada((NoChamadaFuncao) sub);
 						}
 					}
 					if(!valorRet.isEmpty()) break;
@@ -1109,6 +1256,8 @@ class Interpretador {
 						} else if(sub instanceof NoAtribuicao) {
 							NoAtribuicao a2 = (NoAtribuicao) sub;
 							escopoAtual.definir(a2.nome, resolverValor(a2.valor));
+						} else if(sub instanceof NoChamadaFuncao) {
+							executarChamada((NoChamadaFuncao) sub);
 						}
 					}
 					if(!valorRet.isEmpty()) break;
@@ -1140,7 +1289,8 @@ class ArquivosUtil {
             file.mkdirs();
         }
     }
-    private static void criarNovoArquivo(String caminho) {
+	
+    public static void criarNovoArquivo(String caminho) {
         int ultimoPasso= caminho.lastIndexOf(File.separator);
         if(ultimoPasso > 0) {
             String caminhoDiretorio = caminho.substring(0, ultimoPasso);
@@ -1194,12 +1344,23 @@ class ArquivosUtil {
 
 public class FP {
     public FP(String codigo) {
-        AnalisadorLexico lexico = new AnalisadorLexico(codigo);
-        List<Token> tokens = lexico.tokenizar();
-        AnalisadorSintatico sintatico = new AnalisadorSintatico(tokens);
-        List<No> nos = sintatico.analisar();
-        new Interpretador().executar(nos);
+		try {
+			AnalisadorLexico lexico = new AnalisadorLexico(limpar(codigo));
+			List<Token> tokens = lexico.tokenizar();
+			AnalisadorSintatico sintatico = new AnalisadorSintatico(tokens);
+			List<No> nos = sintatico.analisar();
+			new Interpretador().executar(nos);
+		} catch(Exception e) {
+			System.out.println("erro: "+e);
+		}
     }
+	
+	private String limpar(String codigo) {
+		codigo = codigo.replaceAll("//.*?$", "");
+		codigo = codigo.replaceAll("/\\*(.|\\n)*?\\*/", "");
+		codigo = codigo.replaceAll("[ \t]+", " ");
+		codigo = codigo.replaceAll("(?m)^\\s*", "");
+		codigo = codigo.replaceAll("(?m)^\\s*\\n", "");
+		return codigo.trim();
+	}
 }
-
-
