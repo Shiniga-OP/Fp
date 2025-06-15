@@ -10,6 +10,9 @@ import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.FileWriter;
 import android.os.Environment;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.Iterator;
 
 enum TipoToken {
     // tipos:
@@ -41,6 +44,7 @@ enum TipoToken {
     VARIAVEL,
 	// metodos e classes
 	CLASSE,
+	INSTANCIA,
 	NOVO,
     FUNCAO, 
     // nome:
@@ -50,6 +54,8 @@ enum TipoToken {
     PARENTESE_DIR, 
     CHAVE_ESQ, 
     CHAVE_DIR,
+	CONCHETE_ESQ,
+	CONCHETE_DIR,
     // expressoes:
 	PONTO,
     VIRGULA, 
@@ -124,6 +130,14 @@ class AnalisadorLexico {
                 return true;
             case '}':
                 tokens.add(new Token(TipoToken.CHAVE_DIR, "}"));
+                posicao++;
+                return true;
+			case '[':
+                tokens.add(new Token(TipoToken.CONCHETE_ESQ, "["));
+                posicao++;
+                return true;
+            case ']':
+                tokens.add(new Token(TipoToken.CONCHETE_DIR, "]"));
                 posicao++;
                 return true;
             case ';':
@@ -359,6 +373,24 @@ class NoVariavel implements No {
     }
 }
 
+class NoArray implements No {
+    List<No> itens;
+
+    public NoArray(List<No> itens) {
+        this.itens = itens;
+    }
+}
+
+class NoAcessoArray implements No {
+    No array;
+    No indice;
+
+    public NoAcessoArray(No array, No indice) {
+        this.array = array;
+        this.indice = indice;
+    }
+}
+
 // metodos e classe:
 class NoClasse implements No {
     String nome;
@@ -366,6 +398,26 @@ class NoClasse implements No {
     public NoClasse(String nome, List<No> membros) {
         this.nome = nome;
         this.membros = membros;
+    }
+}
+
+// Adicionar nova classe para representar instâncias
+class ObjetoInstancia {
+    String nomeClasse;
+    NoClasse definicao;
+    Map<String, String> campos = new HashMap<>();
+
+    ObjetoInstancia(String nomeClasse, NoClasse definicao) {
+        this.nomeClasse = nomeClasse;
+        this.definicao = definicao;
+    }
+
+    void definirCampo(String nome, String valor) {
+        campos.put(nome, valor);
+    }
+
+    String obterCampo(String nome) {
+        return campos.getOrDefault(nome, "vazio");
     }
 }
 
@@ -550,11 +602,26 @@ class AnalisadorSintatico {
 			case TEX:
 			case IDENTIFICADOR:
 			case PARENTESE_ESQ:
+			case CONCHETE_ESQ:
 			case SUBTRACAO: // pra numeros negativos
 				return true;
 			default:
 				return false;
 		}
+	}
+	
+	private No lerArray() {
+		consumir(TipoToken.CONCHETE_ESQ, "Esperado '['");
+		List<No> itens = new ArrayList<>();
+
+		if(!verificar(TipoToken.CONCHETE_DIR)) {
+			do {
+				itens.add(lerComparacao());
+			} while(verificar(TipoToken.VIRGULA) && avancar() != null);
+		}
+
+		consumir(TipoToken.CONCHETE_DIR, "Esperado ']'");
+		return new NoArray(itens);
 	}
 
 	private No lerComparacao() {
@@ -669,6 +736,17 @@ class AnalisadorSintatico {
 				}
 				consumir(TipoToken.PARENTESE_DIR, "esperado ')'");
 				return new NoChamadaFuncao(nomeFunc, argumentos);
+			// tratar acesso a array
+			} else if(olharProximo(1).tipo == TipoToken.CONCHETE_ESQ) {
+				Token nomeToken = avancar(); // consome IDENTIFICADOR
+				No array = new NoValor(nomeToken.valor, nomeToken.tipo);
+				while(olhar().tipo == TipoToken.CONCHETE_ESQ) {
+					avancar(); // consome '['
+					No indice = lerComparacao();
+					consumir(TipoToken.CONCHETE_DIR, "esperado ']'");
+					array = new NoAcessoArray(array, indice);
+				}
+				return array;
 			}
 			// caso contrário, é variavel ou literal
 			avancar();
@@ -681,6 +759,8 @@ class AnalisadorSintatico {
 			No expr = lerComparacao();
 			consumir(TipoToken.PARENTESE_DIR, "esperado ')'");
 			return expr;
+		} else if(verificar(TipoToken.CONCHETE_ESQ)) {
+			return lerArray();
 		}
 		System.err.println("token inválido em lerTermo(): " + token.tipo);
 		return null;
@@ -764,34 +844,41 @@ class AnalisadorSintatico {
 	}
 
 	private No declaracaoVariavel() {
-		Token tokenTipo = olhar(); // captura o token do tipo
-		avancar(); // consome o token do tipo
+        Token tokenTipo = olhar();
+        avancar(); // consome token do tipo
 
-		String nome = consumir(TipoToken.IDENTIFICADOR, "esperado nome da variavel").valor;
-		consumir(TipoToken.ATRIBUICAO, "esperado '=' após nome da variável");
-		No expressao = lerComparacao();
-		consumir(TipoToken.PONTO_VIRGULA, "esperado ';' após valor da variavel");
+        TipoToken tipoDeclarado;
+        if(tokenTipo.tipo == TipoToken.VARIAVEL) {
+            tipoDeclarado = null;
+        } else if(tokenTipo.tipo == TipoToken.IDENTIFICADOR) {
+            // nome de classe -> variavel de instância
+            tipoDeclarado = TipoToken.INSTANCIA;
+        } else {
+            tipoDeclarado = tokenTipo.tipo;
+        }
 
-		// define o tipo (null para 'var')
-		TipoToken tipoDeclarado = (tokenTipo.tipo != TipoToken.VARIAVEL) 
-			? tokenTipo.tipo 
-			: null;
+        String nome = consumir(TipoToken.IDENTIFICADOR, "esperado nome da variavel").valor;
+        consumir(TipoToken.ATRIBUICAO, "esperado '=' após nome da variável");
+        No expressao = lerComparacao();
+        consumir(TipoToken.PONTO_VIRGULA, "esperado ';' após valor da variavel");
 
-		return new NoAtribuicao(nome, tipoDeclarado, expressao);
-	}
+        return new NoAtribuicao(nome, tipoDeclarado, expressao);
+    }
 
     private No declaracaoFuncao() {
         consumir(TipoToken.FUNCAO, "esperado 'func'");
-        String nome = consumir(TipoToken.IDENTIFICADOR, "esperado nome da função").valor;
+        String nome = consumir(TipoToken.IDENTIFICADOR, "esperado nome da função na declaração").valor;
         consumir(TipoToken.PARENTESE_ESQ, "esperado '('");
 
         List<String> parametros = new ArrayList<>();
-        while(!verificar(TipoToken.PARENTESE_DIR)) {
-            parametros.add(consumir(TipoToken.IDENTIFICADOR, "esperado parâmetro").valor);
-            if(!verificar(TipoToken.PARENTESE_DIR)) {
-                consumir(TipoToken.VIRGULA, "esperado ',' entre parâmetros");
-            }
-        }
+		if(!verificar(TipoToken.PARENTESE_DIR)) {
+			do {
+				parametros.add(consumir(TipoToken.IDENTIFICADOR, "esperado parâmetro").valor);
+				if(verificar(TipoToken.VIRGULA)) {
+					avancar(); // consome a virgula se existir
+				}
+			} while(!verificar(TipoToken.PARENTESE_DIR) && !fim());
+		}
         consumir(TipoToken.PARENTESE_DIR, "esperado ')'");
         consumir(TipoToken.CHAVE_ESQ, "esperado '{'");
 
@@ -804,20 +891,37 @@ class AnalisadorSintatico {
         return new NoFuncao(nome, parametros, corpo);
     }
 
-    private No chamadaFuncao() {
+	private No chamadaFuncao() {
 		String nome = consumir(TipoToken.IDENTIFICADOR, "esperado nome da funcao").valor;
 		consumir(TipoToken.PARENTESE_ESQ, "esperado '('");
 
 		List<No> argumentos = new ArrayList<>();
-		while(!verificar(TipoToken.PARENTESE_DIR)) {
+		int contadorSeguranca = 0;
+		final int MAX_ARGS = 255; // limite seguro de argumentos
+
+		// ler argumentos até encontrar o fechamento de parênteses
+		while(!verificar(TipoToken.PARENTESE_DIR) && contadorSeguranca < MAX_ARGS) {
 			argumentos.add(lerComparacao());
-			if(!verificar(TipoToken.PARENTESE_DIR)) {
-				consumir(TipoToken.VIRGULA, "esperado ',' entre argumentos");
+			contadorSeguranca++;
+
+			// so consome virgula se houver mais argumentos
+			if(verificar(TipoToken.VIRGULA)) {
+				avancar();
+			} else {
+				break;
 			}
 		}
-		consumir(TipoToken.PARENTESE_DIR, "esperado ')'");
-		consumir(TipoToken.PONTO_VIRGULA, "esperado ';'");
+		// verificação de segurança contra loops infinitos
+		if(contadorSeguranca >= MAX_ARGS) {
+			throw new RuntimeException("número excessivo de argumentos na função: " + nome);
+		}
 
+		consumir(TipoToken.PARENTESE_DIR, "esperado ')'");
+
+		// ponto e virgula é opcional
+		if(verificar(TipoToken.PONTO_VIRGULA)) {
+			avancar();
+		}
 		return new NoChamadaFuncao(nome, argumentos);
 	}
 
@@ -851,10 +955,13 @@ class AnalisadorSintatico {
 	}
 
     private Token consumir(TipoToken tipo, String mensagemErro) {
-        if(verificar(tipo)) return avancar();
-        System.err.println(mensagemErro);
-        return new Token(TipoToken.FIM, "vazio");
-    }
+		if(verificar(tipo)) {
+			return avancar();
+		}
+		System.err.println(mensagemErro);
+		// Avança para evitar loop infinito
+		return avancar();
+	}
 
     private boolean verificar(TipoToken tipo) {
         return !estaNoFim() && olhar().tipo==tipo;
@@ -879,8 +986,8 @@ class AnalisadorSintatico {
 }
 
 class Escopo {
-    private final Map<String, String> variaveis = new HashMap<>();
-    private final Escopo pai;
+    public final Map<String, String> variaveis = new HashMap<>();
+    public final Escopo pai;
 
     public Escopo(Escopo pai) {
         this.pai = pai;
@@ -903,6 +1010,8 @@ class Escopo {
 
 class Interpretador {
 	private final Map<String, NoClasse> classes = new HashMap<>();
+	private int contadorInstancias = 0;
+    private final Map<String, ObjetoInstancia> instancias = new HashMap<>();
     private final Map<String, NoFuncao> funcoes = new HashMap<>();
     private Escopo escopoAtual = new Escopo(null); // escopo global
 
@@ -943,8 +1052,63 @@ class Interpretador {
 			} else if(no instanceof NoClasse) {
 				NoClasse classe = (NoClasse) no;
 				classes.put(classe.nome, classe);
+			} else if (no instanceof NoNovo) {
+				NoNovo novo = (NoNovo) no;
+				String id = "instancia_" + (++contadorInstancias);
+				instancias.put(id, criarInstancia(novo.nome));
+				escopoAtual.definir(id, id); // Armazena referência no escopo
 			} else {
 				System.err.println("tipo de nó desconhecido: " + no.getClass().getSimpleName());
+            }
+        } 
+    }
+	
+	private ObjetoInstancia criarInstancia(String nomeClasse) {
+		NoClasse classe = classes.get(nomeClasse);
+		if (classe == null) {
+			System.err.println("Classe '" + nomeClasse + "' não encontrada.");
+			return null;
+		}
+		return new ObjetoInstancia(nomeClasse, classe);
+	}
+
+    // Coletor de lixo mark-and-sweep
+    private void coletarLixo() {
+        Set<String> marcados = new HashSet<>();
+
+        // Fase de marcação (percorre todas as referências ativas)
+        marcarReferencias(escopoAtual, marcados);
+
+        // Fase de limpeza
+        Iterator<String> iterator = instancias.keySet().iterator();
+		while (iterator.hasNext()) {
+			String id = iterator.next();
+			if (!marcados.contains(id)) {
+				iterator.remove();
+			}
+		}
+    }
+
+    private void marcarReferencias(Escopo escopo, Set<String> marcados) {
+        while (escopo != null) {
+            for (String valor : escopo.variaveis.values()) {
+                if (valor.startsWith("instancia_") && !marcados.contains(valor)) {
+                    marcados.add(valor);
+                    marcarReferenciasObjeto(valor, marcados);
+                }
+            }
+            escopo = escopo.pai;
+        }
+    }
+
+    private void marcarReferenciasObjeto(String id, Set<String> marcados) {
+        ObjetoInstancia obj = instancias.get(id);
+        if (obj == null) return;
+
+        for (String valorCampo : obj.campos.values()) {
+            if (valorCampo.startsWith("instancia_") && !marcados.contains(valorCampo)) {
+                marcados.add(valorCampo);
+                marcarReferenciasObjeto(valorCampo, marcados);
             }
         }
     }
@@ -1018,10 +1182,14 @@ class Interpretador {
 	private String executarNativa(NoChamadaFuncao chamada) {
 		String ret = "função desconhecida: " + chamada.nome;
 		List<String> args = new ArrayList<String>();
-		for (No arg : chamada.argumentos) args.add(resolverValor(arg));
+		for(No arg : chamada.argumentos) args.add(resolverValor(arg));
 		// comum:
 		if("log".equals(chamada.nome)) {
-			System.out.println(String.join(" ", args));
+			StringBuilder output = new StringBuilder();
+			for(No ar : chamada.argumentos) {
+				output.append(resolverValor(ar)).append(" ");
+			}
+			System.out.println(output.toString().trim());
 		} else if("FPexec".equals(chamada.nome)) {
 			new FP(args.get(0));
 		// mamatica:
@@ -1058,6 +1226,59 @@ class Interpretador {
             }
             return v.valor;
         }
+		
+		if(no instanceof NoAcessoArray) {
+			NoAcessoArray acesso = (NoAcessoArray) no;
+			String arrayStr = resolverValor(acesso.array);
+
+			// Verificar se é uma representação válida de array
+			if(arrayStr == null || !arrayStr.startsWith("[") || !arrayStr.endsWith("]")) {
+				return "vazio";
+			}
+
+			// Extrair conteúdo do array
+			String conteudo = arrayStr.substring(1, arrayStr.length()-1);
+			String[] elementos;
+			if(conteudo.isEmpty()) {
+				elementos = new String[0];
+			} else {
+				elementos = conteudo.split(",");
+				// Remover espaços em branco
+				for(int i = 0; i < elementos.length; i++) {
+					elementos[i] = elementos[i].trim();
+				}
+			}
+
+			try {
+				int indice = Integer.parseInt(resolverValor(acesso.indice));
+				if(indice >= 0 && indice < elementos.length) {
+					return elementos[indice];
+				}
+			} catch(NumberFormatException e) {
+				// Índice inválido
+			}
+			return "vazio";
+		}
+		
+		if(no instanceof NoArray) {
+			NoArray array = (NoArray) no;
+			StringBuilder sb = new StringBuilder("[");
+			for(int i = 0; i < array.itens.size(); i++) {
+				sb.append(resolverValor(array.itens.get(i)));
+				if(i < array.itens.size() - 1) sb.append(",");
+			}
+			sb.append("]");
+			return sb.toString();
+		}
+		if(no instanceof NoNovo) {
+			NoNovo n = (NoNovo) no;
+			String id = "instancia_" + (++contadorInstancias);
+			ObjetoInstancia obj = criarInstancia(n.nome);
+			if(obj == null) return "vazio";
+			instancias.put(id, obj);
+			// retorna id para atribuição e validação de tipo
+			return id;
+		}
         if(no instanceof NoChamadaFuncao) {
             return executarFuncaoExpressao((NoChamadaFuncao) no);
         }
@@ -1188,6 +1409,8 @@ class Interpretador {
 					return true;
 				case TEX:
 					return true; // qualquer string é valida
+				case INSTANCIA:
+					return valor != null && valor.startsWith("instancia_");
 				default:
 					return false;
 			}
