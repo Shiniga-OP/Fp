@@ -851,10 +851,20 @@ class AnalisadorSintatico {
 			condicao = lerComparacao();
 		}
 		
+		consumir(TipoToken.PONTO_VIRGULA, "Esperado ';' após condicao");
+
 		No incremento = null;
 		if(!verificar(TipoToken.PARENTESE_DIR)) {
-			incremento = lerComparacao();
+			if(verificar(TipoToken.IDENTIFICADOR) && olharProximo(1).tipo == TipoToken.ATRIBUICAO) {
+				Token nome = avancar(); // IDENTIFICADOR
+				avancar(); // =
+				No valor = lerComparacao();
+				incremento = new NoAtribuicao(nome.valor, null, valor);
+			} else {
+				incremento = lerComparacao();
+			}
 		}
+
 		consumir(TipoToken.PARENTESE_DIR, "Esperado ')' após incremento");
 		consumir(TipoToken.CHAVE_ESQ, "Esperado '{' após ')'");
 
@@ -1120,7 +1130,11 @@ class Interpretador {
 							}
 						}
 					}
-					if(loop.incremento != null) resolverValor(loop.incremento);
+					if(loop.incremento instanceof NoAtribuicao) {
+						NoAtribuicao a = (NoAtribuicao) loop.incremento;
+						String v = resolverValor(a.valor);
+						escopoAtual.definir(a.nome, v);
+					}
 				}
 			} else if(no instanceof NoClasse) {
 				NoClasse classe = (NoClasse) no;
