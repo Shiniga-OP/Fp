@@ -1032,8 +1032,13 @@ class Escopo {
     }
 
     public void definir(String nome, String valor) {
-        variaveis.put(nome, valor);
-    }
+		if(temNoEscopo(nome)) {
+			// jA existe em escopos pai = substitui
+			obterEscopo(nome).variaveis.put(nome, valor);
+		} else {
+			variaveis.put(nome, valor);
+		}
+	}
 
     public String obter(String nome) {
         if(variaveis.containsKey(nome)) {
@@ -1044,6 +1049,17 @@ class Escopo {
             return " vazio"; // variavel nao encontrada
         }
     }
+	
+	private boolean temNoEscopo(String nome) {
+		return obterEscopo(nome) != null;
+	}
+
+	private Escopo obterEscopo(String nome) {
+		for(Escopo e = this; e != null; e = e.pai) {
+			if(e.variaveis.containsKey(nome)) return e;
+		}
+		return null;
+	}
 }
 
 class Interpretador {
@@ -1082,10 +1098,29 @@ class Interpretador {
 					executar(Collections.singletonList(loop.inicializacao));
 				}
 				while(loop.condicao == null || avaliarCondicao(loop.condicao)) {
-					executar(loop.corpo);
-					if(loop.incremento != null) {
-						resolverValor(loop.incremento);
+					for(No sub : loop.corpo) {
+						if(sub instanceof NoAtribuicao) {
+							NoAtribuicao a = (NoAtribuicao) sub;
+							escopoAtual.definir(a.nome, resolverValor(a.valor));
+						} else if(sub instanceof NoChamadaFuncao) {
+							executarChamada((NoChamadaFuncao) sub);
+						} else if(sub instanceof NoAtribuicaoArray) {
+							NoAtribuicaoArray a = (NoAtribuicaoArray) sub;
+							String nome = ((NoValor) a.array).valor;
+							String arrayStr = escopoAtual.obter(nome);
+							List<String> lista = new ArrayList<String>();
+							if(arrayStr.startsWith("[") && arrayStr.endsWith("]")) {
+								String[] partes = arrayStr.substring(1, arrayStr.length()-1).split(",");
+								for(String p : partes) lista.add(p.trim());
+							}
+							int idc = Integer.parseInt(resolverValor(a.indice));
+							if(idc >= 0 && idc < lista.size()) {
+								lista.set(idc, resolverValor(a.valor));
+								escopoAtual.definir(nome, "[" + String.join(",", lista) + "]");
+							}
+						}
 					}
+					if(loop.incremento != null) resolverValor(loop.incremento);
 				}
 			} else if(no instanceof NoClasse) {
 				NoClasse classe = (NoClasse) no;
@@ -1320,15 +1355,15 @@ class Interpretador {
 		
 		if(no instanceof NoAcessoArray) {
 			NoAcessoArray acesso = (NoAcessoArray) no;
-			String arrayStr = resolverValor(acesso.array);
+			String arrayStr = escopoAtual.obter(((NoValor) acesso.array).valor);
 
-			// Extrair conteúdo do array
+			// extrai conteudo do array
 			List<String> elementos = new ArrayList<>();
 			if(arrayStr.startsWith("[") && arrayStr.endsWith("]")) {
 				String conteudo = arrayStr.substring(1, arrayStr.length() - 1);
 				if(!conteudo.isEmpty()) {
 					String[] parts = conteudo.split(",");
-					for (String part : parts) {
+					for(String part : parts) {
 						elementos.add(part.trim());
 					}
 				}
@@ -1506,69 +1541,139 @@ class Interpretador {
 
 	private String executarFuncaoExpressao(NoChamadaFuncao chamada) {
 		NoFuncao func = funcoes.get(chamada.nome);
-		if(func == null) {
-			return executarNativa(chamada);
-		}
-		
+		if(func == null) return executarNativa(chamada);
+
 		Escopo escopoAnterior = escopoAtual;
 		escopoAtual = new Escopo(escopoAnterior);
-		// define parâmetros
-		for(int i = 0; i < func.parametros.size(); i++) {
-			String val = resolverValor(chamada.argumentos.get(i));
-			escopoAtual.definir(func.parametros.get(i), val);
-		}
-		
+		for(int i = 0; i < func.parametros.size(); i++)
+			escopoAtual.definir(func.parametros.get(i), resolverValor(chamada.argumentos.get(i)));
+
 		String valorRet = "";
 		for(No no : func.corpo) {
 			if(no instanceof NoRetorne) {
 				valorRet = resolverValor(((NoRetorne) no).valor);
 				break;
-			} else if(no instanceof NoAtribuicao) {
-				NoAtribuicao atribuicao = (NoAtribuicao) no;
-				String valorResolvido = resolverValor(atribuicao.valor);
-				
-				// validação de tipo
-				if(atribuicao.tipoDeclarado != null) {
-					if(!validarTipo(valorResolvido, atribuicao.tipoDeclarado)) {
-						System.err.println(
-						"erro de tipo: " + atribuicao.nome + 
-						" esperava " + atribuicao.tipoDeclarado + 
-						", recebeu: " + valorResolvido);
-						continue;
-					}
-				} 
-				escopoAtual.definir(atribuicao.nome, valorResolvido);
-			} else if(no instanceof NoChamadaFuncao) {
+			}
+			if(no instanceof NoAtribuicao) {
+				NoAtribuicao a = (NoAtribuicao) no;
+				String v = resolverValor(a.valor);
+				if(a.tipoDeclarado == null || validarTipo(v, a.tipoDeclarado))
+					escopoAtual.definir(a.nome, v);
+				else
+					System.err.println("erro de tipo: " + a.nome + " esperava " + a.tipoDeclarado + ", recebeu: " + v);
+				continue;
+			}
+			if(no instanceof NoAtribuicaoArray) {
+				NoAtribuicaoArray a = (NoAtribuicaoArray) no;
+				String nome = ((NoValor) a.array).valor;
+				String arrayStr = escopoAtual.obter(nome);
+				List<String> lista = new ArrayList<String>();
+				if(arrayStr.startsWith("[") && arrayStr.endsWith("]")) {
+					String[] partes = arrayStr.substring(1, arrayStr.length()-1).split(",");
+					for(String p : partes) lista.add(p.trim());
+				}
+				int idc = Integer.parseInt(resolverValor(a.indice));
+				if(idc >= 0 && idc < lista.size()) {
+					lista.set(idc, resolverValor(a.valor));
+					escopoAtual.definir(nome, "[" + String.join(",", lista) + "]");
+				}
+				continue;
+			}
+			if(no instanceof NoChamadaFuncao) {
 				executarChamada((NoChamadaFuncao) no);
-			} else if(no instanceof NoCondicional) {
+				continue;
+			}
+			if(no instanceof NoCondicional) {
 				NoCondicional cond = (NoCondicional) no;
-				boolean res = avaliarCondicao(cond.condicao);
-				if(res) {
-					for(No sub : cond.blocoSe) {
-						if(sub instanceof NoRetorne) {
-							valorRet = resolverValor(((NoRetorne) sub).valor);
-							break;
-						} else if(sub instanceof NoAtribuicao) {
-							NoAtribuicao a2 = (NoAtribuicao) sub;
-							escopoAtual.definir(a2.nome, resolverValor(a2.valor));
-						} else if(sub instanceof NoChamadaFuncao) {
-							executarChamada((NoChamadaFuncao) sub);
+				List<No> bloco = avaliarCondicao(cond.condicao) ? cond.blocoSe : cond.blocoSenao;
+				for(No sub : bloco) {
+					if(sub instanceof NoRetorne) {
+						valorRet = resolverValor(((NoRetorne) sub).valor);
+						break;
+					}
+					if(sub instanceof NoAtribuicao) {
+						NoAtribuicao a = (NoAtribuicao) sub;
+						String v = resolverValor(a.valor);
+						escopoAtual.definir(a.nome, v);
+					} else if(sub instanceof NoAtribuicaoArray) {
+						NoAtribuicaoArray a = (NoAtribuicaoArray) sub;
+						String nome = ((NoValor) a.array).valor;
+						String arrayStr = escopoAtual.obter(nome);
+						List<String> lista = new ArrayList<String>();
+						if(arrayStr.startsWith("[") && arrayStr.endsWith("]")) {
+							String[] partes = arrayStr.substring(1, arrayStr.length()-1).split(",");
+							for(String p : partes) lista.add(p.trim());
+						}
+						int idc = Integer.parseInt(resolverValor(a.indice));
+						if(idc >= 0 && idc < lista.size()) {
+							lista.set(idc, resolverValor(a.valor));
+							escopoAtual.definir(nome, "[" + String.join(",", lista) + "]");
 						}
 					}
-					if(!valorRet.isEmpty()) break;
-				} else {
-					for(No sub : cond.blocoSenao) {
-						if(sub instanceof NoRetorne) {
-							valorRet = resolverValor(((NoRetorne) sub).valor);
-							break;
-						} else if(sub instanceof NoAtribuicao) {
-							NoAtribuicao a2 = (NoAtribuicao) sub;
-							escopoAtual.definir(a2.nome, resolverValor(a2.valor));
-						} else if(sub instanceof NoChamadaFuncao) {
-							executarChamada((NoChamadaFuncao) sub);
+					if(sub instanceof NoChamadaFuncao)
+						executarChamada((NoChamadaFuncao) sub);
+				}
+				if(!valorRet.isEmpty()) break;
+				continue;
+			}
+			if(no instanceof NoEnq) {
+				NoEnq loop = (NoEnq) no;
+				while(avaliarCondicao(loop.condicao))
+					for(No sub : loop.corpo)
+						if(sub instanceof NoAtribuicao) {
+							NoAtribuicao a = (NoAtribuicao) sub;
+							String v = resolverValor(a.valor);
+							escopoAtual.definir(a.nome, v);
+						} else if(sub instanceof NoAtribuicaoArray) {
+							NoAtribuicaoArray a = (NoAtribuicaoArray) sub;
+							String nome = ((NoValor) a.array).valor;
+							String arrayStr = escopoAtual.obter(nome);
+							List<String> lista = new ArrayList<String>();
+							if(arrayStr.startsWith("[") && arrayStr.endsWith("]")) {
+								String[] partes = arrayStr.substring(1, arrayStr.length()-1).split(",");
+								for(String p : partes) lista.add(p.trim());
+							}
+							int idx = Integer.parseInt(resolverValor(a.indice));
+							if(idx >= 0 && idx < lista.size()) {
+								lista.set(idx, resolverValor(a.valor));
+								escopoAtual.definir(nome, "[" + String.join(",", lista) + "]");
+							}
 						}
-					}
-					if(!valorRet.isEmpty()) break;
+						else if(sub instanceof NoChamadaFuncao)
+							executarChamada((NoChamadaFuncao) sub);
+				continue;
+			}
+			if(no instanceof NoPor) {
+				NoPor loop = (NoPor) no;
+				if(loop.inicializacao != null)
+					if(loop.inicializacao instanceof NoAtribuicao)
+						escopoAtual.definir(((NoAtribuicao) loop.inicializacao).nome, resolverValor(((NoAtribuicao) loop.inicializacao).valor));
+					else
+						executar(Collections.singletonList(loop.inicializacao));
+				while(loop.condicao == null || avaliarCondicao(loop.condicao)) {
+					for(No sub : loop.corpo)
+						if(sub instanceof NoAtribuicao) {
+							NoAtribuicao a = (NoAtribuicao) sub;
+							String v = resolverValor(a.valor);
+							escopoAtual.definir(a.nome, v);
+						} else if(sub instanceof NoAtribuicaoArray) {
+							NoAtribuicaoArray a = (NoAtribuicaoArray) sub;
+							String nome = ((NoValor) a.array).valor;
+							String arrayStr = escopoAtual.obter(nome);
+							List<String> lista = new ArrayList<String>();
+							if(arrayStr.startsWith("[") && arrayStr.endsWith("]")) {
+								String[] partes = arrayStr.substring(1, arrayStr.length()-1).split(",");
+								for(String p : partes) lista.add(p.trim());
+							}
+							int idc = Integer.parseInt(resolverValor(a.indice));
+							if(idc >= 0 && idc < lista.size()) {
+								lista.set(idc, resolverValor(a.valor));
+								escopoAtual.definir(nome, "[" + String.join(",", lista) + "]");
+							}
+						}
+						else if(sub instanceof NoChamadaFuncao)
+							executarChamada((NoChamadaFuncao) sub);
+					if(loop.incremento != null) resolverValor(loop.incremento);
 				}
 			}
 		}
