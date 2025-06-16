@@ -309,6 +309,18 @@ class NoAtribuicao implements No {
     }
 }
 
+class NoAtribuicaoArray implements No {
+    No array;
+    No indice;
+    No valor;
+
+    public NoAtribuicaoArray(No array, No indice, No valor) {
+        this.array = array;
+        this.indice = indice;
+        this.valor = valor;
+    }
+}
+
 class NoValor implements No {
     String valor;
     TipoToken tipo;
@@ -579,6 +591,17 @@ class AnalisadorSintatico {
 		if(verificar(TipoToken.CLASSE)) return declaracaoClasse();
 
 		//verificação para reatribuição
+		if(olhar().tipo == TipoToken.IDENTIFICADOR && 
+		   olharProximo(1).tipo == TipoToken.CONCHETE_ESQ) {
+			Token nome = avancar();
+			avancar(); // consome '['
+			No indice = lerComparacao();
+			consumir(TipoToken.CONCHETE_DIR, "Esperado ']'");
+			consumir(TipoToken.ATRIBUICAO, "Esperado '=' após índice");
+			No valor = lerComparacao();
+			consumir(TipoToken.PONTO_VIRGULA, "Esperado ';' após atribuição");
+			return new NoAtribuicaoArray(new NoValor(nome.valor, nome.tipo), indice, valor);
+		}
 		if(olhar().tipo == TipoToken.IDENTIFICADOR && 
 		   olharProximo(1).tipo == TipoToken.ATRIBUICAO) {
 			Token nome = avancar();
@@ -1056,7 +1079,41 @@ class Interpretador {
 				NoNovo novo = (NoNovo) no;
 				String id = "instancia_" + (++contadorInstancias);
 				instancias.put(id, criarInstancia(novo.nome));
-				escopoAtual.definir(id, id); // Armazena referência no escopo
+				escopoAtual.definir(id, id); // armazena referencia no escopo
+			} else if (no instanceof NoAtribuicaoArray) {
+				NoAtribuicaoArray atribArray = (NoAtribuicaoArray) no;
+				String nomeArray = ((NoValor) atribArray.array).valor;
+				String arrayStr = escopoAtual.obter(nomeArray);
+
+				// Converter string do array para lista
+				List<String> lista = new ArrayList<>();
+				if(arrayStr.startsWith("[") && arrayStr.endsWith("]")) {
+					String conteudo = arrayStr.substring(1, arrayStr.length() - 1);
+					if(!conteudo.isEmpty()) {
+						String[] elementos = conteudo.split(",");
+						for(String elemento : elementos) {
+							lista.add(elemento.trim());
+						}
+					}
+				}
+
+				// Atualizar elemento
+				int indice = Integer.parseInt(resolverValor(atribArray.indice));
+				String novoValor = resolverValor(atribArray.valor);
+
+				if(indice >= 0 && indice < lista.size()) {
+					lista.set(indice, novoValor);
+
+					// Converter lista de volta para string
+					StringBuilder sb = new StringBuilder("[");
+					for(int i = 0; i < lista.size(); i++) {
+						sb.append(lista.get(i));
+						if(i < lista.size() - 1) sb.append(",");
+					}
+					sb.append("]");
+
+					escopoAtual.definir(nomeArray, sb.toString());
+				}
 			} else {
 				System.err.println("tipo de nó desconhecido: " + no.getClass().getSimpleName());
             }
@@ -1231,35 +1288,28 @@ class Interpretador {
 			NoAcessoArray acesso = (NoAcessoArray) no;
 			String arrayStr = resolverValor(acesso.array);
 
-			// Verificar se é uma representação válida de array
-			if(arrayStr == null || !arrayStr.startsWith("[") || !arrayStr.endsWith("]")) {
-				return "vazio";
-			}
-
 			// Extrair conteúdo do array
-			String conteudo = arrayStr.substring(1, arrayStr.length()-1);
-			String[] elementos;
-			if(conteudo.isEmpty()) {
-				elementos = new String[0];
-			} else {
-				elementos = conteudo.split(",");
-				// Remover espaços em branco
-				for(int i = 0; i < elementos.length; i++) {
-					elementos[i] = elementos[i].trim();
+			List<String> elementos = new ArrayList<>();
+			if(arrayStr.startsWith("[") && arrayStr.endsWith("]")) {
+				String conteudo = arrayStr.substring(1, arrayStr.length() - 1);
+				if(!conteudo.isEmpty()) {
+					String[] parts = conteudo.split(",");
+					for (String part : parts) {
+						elementos.add(part.trim());
+					}
 				}
 			}
 
 			try {
 				int indice = Integer.parseInt(resolverValor(acesso.indice));
-				if(indice >= 0 && indice < elementos.length) {
-					return elementos[indice];
+				if(indice >= 0 && indice < elementos.size()) {
+					return elementos.get(indice);
 				}
 			} catch(NumberFormatException e) {
-				// Índice inválido
+				System.out.println("indice invalido");
 			}
 			return "vazio";
 		}
-		
 		if(no instanceof NoArray) {
 			NoArray array = (NoArray) no;
 			StringBuilder sb = new StringBuilder("[");
@@ -1270,6 +1320,7 @@ class Interpretador {
 			sb.append("]");
 			return sb.toString();
 		}
+		
 		if(no instanceof NoNovo) {
 			NoNovo n = (NoNovo) no;
 			String id = "instancia_" + (++contadorInstancias);
