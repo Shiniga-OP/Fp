@@ -403,6 +403,16 @@ class NoAcessoArray implements No {
     }
 }
 
+class NoAcessoPropriedade implements No {
+    No objeto;
+    String propriedade;
+
+    public NoAcessoPropriedade(No objeto, String propriedade) {
+        this.objeto = objeto;
+        this.propriedade = propriedade;
+    }
+}
+
 // metodos e classe:
 class NoClasse implements No {
     String nome;
@@ -759,7 +769,7 @@ class AnalisadorSintatico {
 				}
 				consumir(TipoToken.PARENTESE_DIR, "esperado ')'");
 				return new NoChamadaFuncao(nomeFunc, argumentos);
-			// tratar acesso a array
+			// trata acesso a array
 			} else if(olharProximo(1).tipo == TipoToken.CONCHETE_ESQ) {
 				Token nomeToken = avancar(); // consome IDENTIFICADOR
 				No array = new NoValor(nomeToken.valor, nomeToken.tipo);
@@ -770,8 +780,13 @@ class AnalisadorSintatico {
 					array = new NoAcessoArray(array, indice);
 				}
 				return array;
+			} else if(olharProximo(1).tipo == TipoToken.PONTO) {
+				Token objetoToken = avancar(); // consome o identificador
+				avancar(); // consome o ponto
+				Token propriedadeToken = consumir(TipoToken.IDENTIFICADOR, "Esperado nome da propriedade após '.'");
+				return new NoAcessoPropriedade(new NoValor(objetoToken.valor, objetoToken.tipo), propriedadeToken.valor);
 			}
-			// caso contrário, é variavel ou literal
+			// caso contrario, é variavel ou literal
 			avancar();
 			return new NoValor(token.valor, token.tipo);
 		} else if(token.tipo == TipoToken.NUMERO || token.tipo == TipoToken.TEX) {
@@ -982,7 +997,7 @@ class AnalisadorSintatico {
 			return avancar();
 		}
 		System.err.println(mensagemErro);
-		// Avança para evitar loop infinito
+		// avanca para evitar loop infinito
 		return avancar();
 	}
 
@@ -1122,7 +1137,7 @@ class Interpretador {
 	
 	private ObjetoInstancia criarInstancia(String nomeClasse) {
 		NoClasse classe = classes.get(nomeClasse);
-		if (classe == null) {
+		if(classe == null) {
 			System.err.println("Classe '" + nomeClasse + "' não encontrada.");
 			return null;
 		}
@@ -1140,16 +1155,16 @@ class Interpretador {
         Iterator<String> iterator = instancias.keySet().iterator();
 		while (iterator.hasNext()) {
 			String id = iterator.next();
-			if (!marcados.contains(id)) {
+			if(!marcados.contains(id)) {
 				iterator.remove();
 			}
 		}
     }
 
     private void marcarReferencias(Escopo escopo, Set<String> marcados) {
-        while (escopo != null) {
-            for (String valor : escopo.variaveis.values()) {
-                if (valor.startsWith("instancia_") && !marcados.contains(valor)) {
+        while(escopo != null) {
+            for(String valor : escopo.variaveis.values()) {
+                if(valor.startsWith("instancia_") && !marcados.contains(valor)) {
                     marcados.add(valor);
                     marcarReferenciasObjeto(valor, marcados);
                 }
@@ -1160,10 +1175,10 @@ class Interpretador {
 
     private void marcarReferenciasObjeto(String id, Set<String> marcados) {
         ObjetoInstancia obj = instancias.get(id);
-        if (obj == null) return;
+        if(obj == null) return;
 
-        for (String valorCampo : obj.campos.values()) {
-            if (valorCampo.startsWith("instancia_") && !marcados.contains(valorCampo)) {
+        for(String valorCampo : obj.campos.values()) {
+            if(valorCampo.startsWith("instancia_") && !marcados.contains(valorCampo)) {
                 marcados.add(valorCampo);
                 marcarReferenciasObjeto(valorCampo, marcados);
             }
@@ -1283,6 +1298,25 @@ class Interpretador {
             }
             return v.valor;
         }
+		
+		if(no instanceof NoAcessoPropriedade) {
+			NoAcessoPropriedade acesso = (NoAcessoPropriedade) no;
+			String objetoStr = resolverValor(acesso.objeto);
+			String propriedade = acesso.propriedade;
+
+			// verifica se é um array e o campo é "tam"
+			if(objetoStr.startsWith("[") && objetoStr.endsWith("]")) {
+				if("tam".equals(propriedade)) {
+					String conteudo = objetoStr.substring(1, objetoStr.length() - 1).trim();
+					if(conteudo.isEmpty()) {
+						return "0";
+					}
+					String[] elementos = conteudo.split(",");
+					return String.valueOf(elementos.length);
+				}
+			}
+			return "vazio";
+		}
 		
 		if(no instanceof NoAcessoArray) {
 			NoAcessoArray acesso = (NoAcessoArray) no;
