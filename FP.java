@@ -109,7 +109,6 @@ class AnalisadorLexico {
                 System.err.println("caractere invalido: '"+atual+"' na posicao "+posicao);
             }
         }
-
         tokens.add(new Token(TipoToken.FIM, ""));
         return tokens;
     }
@@ -413,17 +412,40 @@ class NoAcessoPropriedade implements No {
     }
 }
 
+class NoAtribuicaoPropriedade implements No {
+    No objeto;
+    String propriedade;
+    No valor;
+    public NoAtribuicaoPropriedade(No objeto, String propriedade, No valor) {
+        this.objeto = objeto;
+        this.propriedade = propriedade;
+        this.valor = valor;
+    }
+}
+
+// 4) Nova AST para chamada de método:
+class NoChamadaMetodo implements No {
+    No objeto;
+    String nome;
+    List<No> argumentos;
+    public NoChamadaMetodo(No objeto, String nome, List<No> argumentos) {
+        this.objeto = objeto;
+        this.nome = nome;
+        this.argumentos = argumentos;
+    }
+}
+
 // metodos e classe:
 class NoClasse implements No {
     String nome;
     List<No> membros;
+	
     public NoClasse(String nome, List<No> membros) {
         this.nome = nome;
         this.membros = membros;
     }
 }
 
-// Adicionar nova classe para representar instâncias
 class ObjetoInstancia {
     String nomeClasse;
     NoClasse definicao;
@@ -599,8 +621,48 @@ class AnalisadorSintatico {
 		if(verificar(TipoToken.ENQ)) return declaracaoEnq();
 		if(verificar(TipoToken.POR)) return declaracaoPor();
 		if(verificar(TipoToken.CLASSE)) return declaracaoClasse();
+		
+		// chamada dr netodo
+		if (olhar().tipo == TipoToken.IDENTIFICADOR
+            && olharProximo(1).tipo == TipoToken.PONTO
+            && olharProximo(2).tipo == TipoToken.IDENTIFICADOR
+            && olharProximo(3).tipo == TipoToken.PARENTESE_ESQ) {
 
-		//verificação para reatribuição
+            Token objetoToken = avancar(); // objeto
+            avancar(); // consome '.'
+            Token metodoToken = avancar(); // nome do método
+            avancar(); // consome '('
+
+            List<No> argumentos = new ArrayList<>();
+            if (!verificar(TipoToken.PARENTESE_DIR)) {
+                do {
+                    argumentos.add(lerComparacao());
+                } while (verificar(TipoToken.VIRGULA) && avancar() != null);
+            }
+            consumir(TipoToken.PARENTESE_DIR, "Esperado ')' após argumentos");
+            consumir(TipoToken.PONTO_VIRGULA, "Esperado ';'");
+
+            return new NoChamadaMetodo(
+                new NoValor(objetoToken.valor, objetoToken.tipo),
+                metodoToken.valor,
+                argumentos
+            );
+        }
+		
+		//verificação pra reatribuição
+		if((olhar().tipo == TipoToken.IDENTIFICADOR || olhar().tipo == TipoToken.ESTE)
+		   && olharProximo(1).tipo == TipoToken.PONTO
+		   && olharProximo(2).tipo == TipoToken.IDENTIFICADOR
+		   && olharProximo(3).tipo == TipoToken.ATRIBUICAO) {
+			Token objetoToken = avancar();
+			No objeto = new NoValor(objetoToken.valor, objetoToken.tipo);
+			avancar(); // consome '.'
+			String prop = consumir(TipoToken.IDENTIFICADOR,"").valor;
+			avancar(); // consome '='
+			No val = lerComparacao();
+			consumir(TipoToken.PONTO_VIRGULA,"");
+			return new NoAtribuicaoPropriedade(objeto, prop, val);
+		}
 		if(olhar().tipo == TipoToken.IDENTIFICADOR && 
 		   olharProximo(1).tipo == TipoToken.CONCHETE_ESQ) {
 			Token nome = avancar();
@@ -620,7 +682,6 @@ class AnalisadorSintatico {
 			consumir(TipoToken.PONTO_VIRGULA, "Esperado ';' após atribuição");
 			return new NoAtribuicao(nome.valor, null, valor); // Tipo null
 		}
-
 		return chamadaFuncao();
 	}
 
@@ -637,6 +698,7 @@ class AnalisadorSintatico {
 			case PARENTESE_ESQ:
 			case CONCHETE_ESQ:
 			case SUBTRACAO: // pra numeros negativos
+			case NOVO:
 				return true;
 			default:
 				return false;
@@ -736,6 +798,15 @@ class AnalisadorSintatico {
 	}
 
 	private No lerPrimario() {
+		if(verificar(TipoToken.NOVO)) {
+			avancar(); // consome 'novo'
+			String nomeClasse = consumir(TipoToken.IDENTIFICADOR, "esperado nome da classe").valor;
+			if(verificar(TipoToken.PARENTESE_ESQ)) {
+				avancar();
+				consumir(TipoToken.PARENTESE_DIR, "esperado ')'");
+			}
+			return new NoNovo(nomeClasse);
+		}
 		if(verificar(TipoToken.PARENTESE_ESQ)) {
 			avancar();
 			No expressao = lerComparacao();
@@ -756,8 +827,29 @@ class AnalisadorSintatico {
 
 	private No lerTermo() {
 		Token token = olhar();
+		// acesso a campos em classes com "este"
+		if(token.tipo == TipoToken.ESTE && olharProximo(1).tipo == TipoToken.PONTO) {
+			avancar(); // consome 'este'
+			avancar(); // consome '.'
+			String propriedade = consumir(TipoToken.IDENTIFICADOR, "esperado nome da propriedade").valor;
+			return new NoAcessoPropriedade(new NoValor("este", TipoToken.IDENTIFICADOR), propriedade);
+		}
 		if(token.tipo == TipoToken.IDENTIFICADOR) {
-			// se for IDENTIFICADOR com "(" trata como chamada de função
+			// chamada de metodos
+			if(olharProximo(1).tipo == TipoToken.PONTO && olharProximo(2).tipo == TipoToken.IDENTIFICADOR && olharProximo(3).tipo == TipoToken.PARENTESE_ESQ) {
+				No alvo = new NoValor(avancar().valor, TipoToken.IDENTIFICADOR);
+				avancar(); // '.'
+				String nomeM = consumir(TipoToken.IDENTIFICADOR,"").valor;
+				avancar(); // '('
+				List<No> args = new ArrayList<>();
+				if (!verificar(TipoToken.PARENTESE_DIR)) {
+					do { args.add(lerComparacao()); }
+					while (verificar(TipoToken.VIRGULA) && avancar()!=null);
+				}
+				consumir(TipoToken.PARENTESE_DIR,"");
+				return new NoChamadaMetodo(alvo, nomeM, args);
+			}
+			// chamadas de funções normais
 			if(olharProximo(1).tipo == TipoToken.PARENTESE_ESQ) {
 				String nomeFunc = avancar().valor; // consome IDENTIFICADOR
 				avancar(); // consome  "("
@@ -769,7 +861,7 @@ class AnalisadorSintatico {
 				}
 				consumir(TipoToken.PARENTESE_DIR, "esperado ')'");
 				return new NoChamadaFuncao(nomeFunc, argumentos);
-			// trata acesso a array
+			// acesso de itens de arrays
 			} else if(olharProximo(1).tipo == TipoToken.CONCHETE_ESQ) {
 				Token nomeToken = avancar(); // consome IDENTIFICADOR
 				No array = new NoValor(nomeToken.valor, nomeToken.tipo);
@@ -780,6 +872,7 @@ class AnalisadorSintatico {
 					array = new NoAcessoArray(array, indice);
 				}
 				return array;
+				// acesso a propriedades;
 			} else if(olharProximo(1).tipo == TipoToken.PONTO) {
 				Token objetoToken = avancar(); // consome o identificador
 				avancar(); // consome o ponto
@@ -792,11 +885,13 @@ class AnalisadorSintatico {
 		} else if(token.tipo == TipoToken.NUMERO || token.tipo == TipoToken.TEX) {
 			avancar();
 			return new NoValor(token.valor, token.tipo);
+			// prioridade de contas com parenteses
 		} else if(verificar(TipoToken.PARENTESE_ESQ)) {
 			avancar();
 			No expr = lerComparacao();
 			consumir(TipoToken.PARENTESE_DIR, "esperado ')'");
 			return expr;
+			// declara arrays
 		} else if(verificar(TipoToken.CONCHETE_ESQ)) {
 			return lerArray();
 		}
@@ -884,10 +979,22 @@ class AnalisadorSintatico {
 
 		List<No> membros = new ArrayList<>();
 		while(!verificar(TipoToken.CHAVE_DIR)) {
-			membros.add(declaracao());
+			// declarações de variaveis(campos) e funções metodos)
+			if(verificar(TipoToken.VARIAVEL) || 
+			   verificar(TipoToken.BOOL) || 
+			   verificar(TipoToken.TEX) || 
+			   verificar(TipoToken.INT) || 
+			   verificar(TipoToken.FLUTU) || 
+			   verificar(TipoToken.DOBRO) ||
+			   verificar(TipoToken.FUNCAO)) 
+			{
+				membros.add(declaracao());
+			} else {
+				System.err.println("Membro inválido na classe: " + olhar().tipo);
+				avancar(); // pula token invalido
+			}
 		}
 		consumir(TipoToken.CHAVE_DIR, "Esperado '}'");
-
 		return new NoClasse(nome, membros);
 	}
 
@@ -897,7 +1004,7 @@ class AnalisadorSintatico {
 
         TipoToken tipoDeclarado;
 		if(tokenTipo.tipo == TipoToken.IDENTIFICADOR) {
-            // nome de classe -> variavel de instância
+            // nome de classe = variavel de instancia
             tipoDeclarado = TipoToken.INSTANCIA;
         } else {
             tipoDeclarado = tokenTipo.tipo;
@@ -1202,7 +1309,43 @@ class Interpretador {
 					
 					escopoAtual.atribuir(nomeArray, sb.toString());
 				}
-			} else {
+			} else if(no instanceof NoClasse) {
+				NoClasse c = (NoClasse) no;
+				classes.put(c.nome, c);
+			} else if (no instanceof NoAtribuicaoPropriedade) {
+				NoAtribuicaoPropriedade a = (NoAtribuicaoPropriedade) no;
+				String id = resolverValor(a.objeto);
+				ObjetoInstancia obj = instancias.get(id);
+				obj.definirCampo(a.propriedade, resolverValor(a.valor));
+			} else if (no instanceof NoChamadaMetodo) {
+                // Executa chamadas de método diretamente
+                NoChamadaMetodo cm = (NoChamadaMetodo) no;
+                String id = resolverValor(cm.objeto);
+                ObjetoInstancia obj = instancias.get(id);
+                if(obj == null) {
+                    System.err.println("Objeto não encontrado: " + id);
+                    continue;
+                }
+                NoClasse def = obj.definicao;
+                for(No m : def.membros) {
+                    if(m instanceof NoFuncao && ((NoFuncao) m).nome.equals(cm.nome)) {
+                        NoFuncao f = (NoFuncao) m;
+                        Escopo anterior = escopoAtual;
+                        escopoAtual = new Escopo(anterior);
+                        escopoAtual.definir("este", TipoToken.TEX, id);
+                        for(int i = 0; i < f.parametros.size(); i++) {
+                            escopoAtual.definir(
+                                f.parametros.get(i),
+                                TipoToken.VARIAVEL,
+                                resolverValor(cm.argumentos.get(i))
+                            );
+                        }
+                        executar(f.corpo);
+                        escopoAtual = anterior;
+                        break;
+                    }
+                }
+            } else {
 				System.err.println("tipo de nó desconhecido: " + no.getClass().getSimpleName());
             }
         } 
@@ -1318,6 +1461,10 @@ class Interpretador {
 			}
 			System.out.println(saida.toString().trim());
 			saida = null;
+		} else if("liberar".equals(chamada.nome)) {
+			for(String arg : args) {
+				instancias.remove(arg);
+			}
 		} else if("FPexec".equals(chamada.nome)) {
 			new FP(args.get(0));
 			// mamatica:
@@ -1355,14 +1502,23 @@ class Interpretador {
 	}
 	
 	// fase de testes:
+	// orientação a objetos:
 	private ObjetoInstancia criarInstancia(String nomeClasse) {
-		NoClasse classe = classes.get(nomeClasse);
-		if(classe == null) {
-			System.err.println("Classe '" + nomeClasse + "' não encontrada.");
-			return null;
-		}
-		return new ObjetoInstancia(nomeClasse, classe);
-	}
+        NoClasse classe = classes.get(nomeClasse);
+        if(classe == null) {
+            System.err.println("Classe '" + nomeClasse + "' não encontrada.");
+            return null;
+        }
+        ObjetoInstancia obj = new ObjetoInstancia(nomeClasse, classe);
+        for(No membro : classe.membros) {
+            if(membro instanceof NoAtribuicao) {
+                NoAtribuicao campo = (NoAtribuicao) membro;
+                String valor = resolverValor(campo.valor);
+                obj.definirCampo(campo.nome, valor);
+            }
+        }
+        return obj; // instancia
+    }
 
     private void marcarReferenciasObjeto(String id, Set<String> marcados) {
         ObjetoInstancia obj = instancias.get(id);
@@ -1484,6 +1640,14 @@ class Interpretador {
 			NoAcessoPropriedade acesso = (NoAcessoPropriedade) no;
 			String objetoStr = resolverValor(acesso.objeto);
 			String propriedade = acesso.propriedade;
+			
+			// se for instancia
+			if(objetoStr.startsWith("instancia_")) {
+				ObjetoInstancia obj = instancias.get(objetoStr);
+				if(obj != null) {
+					return obj.obterCampo(propriedade);
+				}
+			}
 
 			// verifica se é um array e o campo é "tam"
 			if(objetoStr.startsWith("[") && objetoStr.endsWith("]")) {
@@ -1542,7 +1706,6 @@ class Interpretador {
 			ObjetoInstancia obj = criarInstancia(n.nome);
 			if(obj == null) return "vazio";
 			instancias.put(id, obj);
-			// retorna id para atribuição e validação de tipo
 			return id;
 		}
         if(no instanceof NoChamadaFuncao) {
@@ -1636,7 +1799,7 @@ class Interpretador {
                 }
             }
         }
-        if (no instanceof NoPorcentagem) {
+        if(no instanceof NoPorcentagem) {
             NoPorcentagem n = (NoPorcentagem) no;
             String e = resolverValor(n.esquerda);
             String d = resolverValor(n.direita);
@@ -1660,18 +1823,6 @@ class Interpretador {
         }
         return "";
     }
-	// descobre o tipo de variaveis:
-	private TipoToken resolverTipo(String valor) {
-		if("verdade".equals(valor) || "falso".equals(valor)) return TipoToken.BOOL;
-		try {
-			Integer.parseInt(valor); return TipoToken.INT;
-		} catch(Exception e) {}
-		try {
-			Float.parseFloat(valor); return TipoToken.FLUTU;
-		} catch(Exception e) {}
-		if(valor != null && valor.startsWith("instancia_")) return TipoToken.INSTANCIA;
-		return TipoToken.TEX;
-	}
 }
 
 // API de arquivos nativa:
