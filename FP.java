@@ -13,6 +13,7 @@ import android.os.Environment;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.lang.reflect.Method;
 
 enum TipoToken {
     // tipos:
@@ -640,7 +641,7 @@ class AnalisadorSintatico {
 		if(verificar(TipoToken.MARCACAO)) return declaracaoIncluir();
 		
 		// chamada dr netodo
-		if (olhar().tipo == TipoToken.IDENTIFICADOR
+		if(olhar().tipo == TipoToken.IDENTIFICADOR
             && olharProximo(1).tipo == TipoToken.PONTO
             && olharProximo(2).tipo == TipoToken.IDENTIFICADOR
             && olharProximo(3).tipo == TipoToken.PARENTESE_ESQ) {
@@ -651,10 +652,10 @@ class AnalisadorSintatico {
             avancar(); // consome '('
 
             List<No> argumentos = new ArrayList<>();
-            if (!verificar(TipoToken.PARENTESE_DIR)) {
+            if(!verificar(TipoToken.PARENTESE_DIR)) {
                 do {
                     argumentos.add(lerComparacao());
-                } while (verificar(TipoToken.VIRGULA) && avancar() != null);
+                } while(verificar(TipoToken.VIRGULA) && avancar() != null);
             }
             consumir(TipoToken.PARENTESE_DIR, "Esperado ')' após argumentos");
             consumir(TipoToken.PONTO_VIRGULA, "Esperado ';'");
@@ -697,9 +698,18 @@ class AnalisadorSintatico {
 			avancar(); // consome o '='
 			No valor = lerComparacao();
 			consumir(TipoToken.PONTO_VIRGULA, "Esperado ';' após atribuição");
-			return new NoAtribuicao(nome.valor, null, valor); // Tipo null
+			return new NoAtribuicao(nome.valor, null, valor); // tipo null
 		}
-		return chamadaFuncao();
+		
+		if(tokenInicioExpressao(olhar().tipo)) {
+			No expr = lerComparacao();
+			consumir(TipoToken.PONTO_VIRGULA, "Esperado ';' após expressão");
+			return expr;
+		}
+
+		System.err.println("Declaração inválida: " + olhar().tipo);
+		avancar();
+		return null;
 	}
 
 	private Token olharProximo(int passos) {
@@ -716,6 +726,7 @@ class AnalisadorSintatico {
 			case CONCHETE_ESQ:
 			case SUBTRACAO: // pra numeros negativos
 			case NOVO:
+			case ESTE:
 				return true;
 			default:
 				return false;
@@ -848,8 +859,24 @@ class AnalisadorSintatico {
 		if(token.tipo == TipoToken.ESTE && olharProximo(1).tipo == TipoToken.PONTO) {
 			avancar(); // consome 'este'
 			avancar(); // consome '.'
-			String propriedade = consumir(TipoToken.IDENTIFICADOR, "esperado nome da propriedade").valor;
-			return new NoAcessoPropriedade(new NoValor("este", TipoToken.IDENTIFICADOR), propriedade);
+
+			// chamada metodo
+			if(olhar().tipo == TipoToken.IDENTIFICADOR && olharProximo(1).tipo == TipoToken.PARENTESE_ESQ) {
+				String nomeM = consumir(TipoToken.IDENTIFICADOR, "").valor;
+				avancar(); // '('
+				List<No> args = new ArrayList<>();
+				if(!verificar(TipoToken.PARENTESE_DIR)) {
+					do { args.add(lerComparacao()); }
+					while(verificar(TipoToken.VIRGULA) && avancar()!=null);
+				}
+				consumir(TipoToken.PARENTESE_DIR, "");
+				return new NoChamadaMetodo(new NoValor("este", TipoToken.IDENTIFICADOR), nomeM, args);
+			} 
+			// acesso a propriedade normal
+			else {
+				String propriedade = consumir(TipoToken.IDENTIFICADOR, "esperado nome da propriedade").valor;
+				return new NoAcessoPropriedade(new NoValor("este", TipoToken.IDENTIFICADOR), propriedade);
+			}
 		}
 		if(token.tipo == TipoToken.IDENTIFICADOR) {
 			// chamada de metodos
@@ -859,9 +886,9 @@ class AnalisadorSintatico {
 				String nomeM = consumir(TipoToken.IDENTIFICADOR,"").valor;
 				avancar(); // '('
 				List<No> args = new ArrayList<>();
-				if (!verificar(TipoToken.PARENTESE_DIR)) {
+				if(!verificar(TipoToken.PARENTESE_DIR)) {
 					do { args.add(lerComparacao()); }
-					while (verificar(TipoToken.VIRGULA) && avancar()!=null);
+					while(verificar(TipoToken.VIRGULA) && avancar()!=null);
 				}
 				consumir(TipoToken.PARENTESE_DIR,"");
 				return new NoChamadaMetodo(alvo, nomeM, args);
@@ -1241,6 +1268,19 @@ class Interpretador {
     private final Map<String, ObjetoInstancia> instancias = new HashMap<>();
     private final Map<String, NoFuncao> funcoes = new HashMap<>();
     private Escopo escopoAtual = new Escopo(null); // escopo global
+	private final Map<String, Class<?>> classesNativas = new HashMap<>();
+    private final Map<String, Object> objetosNativos = new HashMap<>();
+
+    class ClasseNativa {
+        final Class<?> classe;
+        public ClasseNativa(Class<?> classe) {
+            this.classe = classe;
+        }
+    }
+	
+	public Interpretador(){
+		registrarClasseNativa("Matematica", Matematica.class);
+	}
 	
 	// execuções:
 	// globais:
@@ -1482,28 +1522,34 @@ class Interpretador {
 	
 	// nativas:
 	private String executarNativa(NoChamadaFuncao chamada) {
-		String ret = "função desconhecida: " + chamada.nome;
-		List<String> args = new ArrayList<String>();
-		for(No arg : chamada.argumentos) args.add(resolverValor(arg));
-		// comum:
-		if("log".equals(chamada.nome)) {
-			StringBuilder saida = new StringBuilder();
-			for(No ar : chamada.argumentos) {
-				saida.append(resolverValor(ar)).append(" ");
-			}
-			System.out.println(saida.toString().trim());
-			saida = null;
-		} else if("liberar".equals(chamada.nome)) {
-			for(String arg : args) {
-				instancias.remove(arg);
-			}
-		} else if("proceTempoMilis".equals(chamada.nome)) {
-			return String.valueOf(System.currentTimeMillis());
-		} else {
-			return APIs.executar(chamada, args);
-		}
-		return ret;
-	}
+        String ret = "função desconhecida: " + chamada.nome;
+        List<String> args = new ArrayList<>();
+        for(No arg : chamada.argumentos) args.add(resolverValor(arg));
+
+        if("log".equals(chamada.nome)) {
+            StringBuilder saida = new StringBuilder();
+            for(No ar : chamada.argumentos) {
+                saida.append(resolverValor(ar)).append(" ");
+            }
+            System.out.println(saida.toString().trim());
+        } else if("liberar".equals(chamada.nome)) {
+            for(String arg : args) {
+                instancias.remove(arg);
+                objetosNativos.remove(arg); // Libera instâncias nativas também
+            }
+        } else if("proceTempoMilis".equals(chamada.nome)) {
+            return String.valueOf(System.currentTimeMillis());
+        } else if("nativa".equals(chamada.nome)) {
+            // Função para obter referência a classe nativa
+            String nomeClasse = args.get(0);
+            Class<?> classe = classesNativas.get(nomeClasse);
+            if(classe == null) return "vazio";
+            String id = "nativa_" + nomeClasse;
+            objetosNativos.put(id, new ClasseNativa(classe));
+            return id;
+        }
+        return ret;
+    }
 	
 	private String executarBloco(List<No> blocos) {
 		String valorRetorno = "";
@@ -1553,6 +1599,10 @@ class Interpretador {
                 marcarReferenciasObjeto(valorCampo, marcados);
             }
         }
+    }
+	
+	public void registrarClasseNativa(String nome, Class<?> classe) {
+        classesNativas.put(nome, classe);
     }
 
 	// validações:
@@ -1651,6 +1701,72 @@ class Interpretador {
 	// resolvedores:
 	// resolve operações mamaticas:
     private String resolverValor(No no) {
+		if(no instanceof NoNovo) {
+            NoNovo n = (NoNovo) no;
+			
+			if(classesNativas.containsKey(n.nome)) {
+                Class<?> classe = classesNativas.get(n.nome);
+                try {
+                    Object instancia = classe.newInstance();
+                    String id = "instancia_nativa_" + (++contadorInstancias);
+                    objetosNativos.put(id, instancia);
+                    return id;
+                } catch(Exception e) {
+                    e.printStackTrace();
+                    return "vazio";
+                }
+            }
+			
+            String id = "instancia_" + (++contadorInstancias);
+            // verificarse é classe FP
+            if(classes.containsKey(n.nome)) {
+                ObjetoInstancia obj = criarInstancia(n.nome);
+                if(obj == null) return "vazio";
+                instancias.put(id, obj);
+                return id;
+            }
+        }
+
+        if(no instanceof NoChamadaMetodo) {
+            NoChamadaMetodo cm = (NoChamadaMetodo) no;
+            String id = resolverValor(cm.objeto);
+
+            // chamada para instancia nativa
+            if(objetosNativos.containsKey(id)) {
+                Object objeto = objetosNativos.get(id);
+                try {
+                    // encontra o metodo pelo nome e parametros
+                    Method metodo = null;
+                    for (Method m : objeto.getClass().getMethods()) {
+                        if (m.getName().equals(cm.nome) && 
+                            m.getParameterCount() == cm.argumentos.size()) {
+                            metodo = m;
+                            break;
+                        }
+                    }
+
+                    if(metodo == null) {
+                        return "vazio";
+                    }
+
+                    // converte argumentos
+                    Object[] args = new Object[cm.argumentos.size()];
+                    Class<?>[] tiposParam = metodo.getParameterTypes();
+                    for(int i = 0; i < cm.argumentos.size(); i++) {
+                        String valor = resolverValor(cm.argumentos.get(i));
+                        args[i] = converter(valor, tiposParam[i]);
+                    }
+
+                    // invocar o metodo
+                    Object resultado = metodo.invoke(objeto, args);
+                    return converterResultado(resultado);
+                } catch(Exception e) {
+                    e.printStackTrace();
+                    return "vazio";
+                }
+            }
+		}
+			
         if(no instanceof NoValor) {
             NoValor v = (NoValor) no;
             if(v.tipo == TipoToken.IDENTIFICADOR) {
@@ -1872,6 +1988,33 @@ class Interpretador {
         }
         return "";
     }
+	
+	// FP pra Java
+	private Object converter(String valor, Class<?> tipo) {
+        if(tipo == String.class) {
+            return valor;
+        } else if(tipo == int.class || tipo == Integer.class) {
+            return Integer.parseInt(valor);
+        } else if(tipo == long.class || tipo == Long.class) {
+            return Long.parseLong(valor);
+        } else if(tipo == float.class || tipo == Float.class) {
+            return Float.parseFloat(valor);
+        } else if(tipo == double.class || tipo == Double.class) {
+            return Double.parseDouble(valor);
+        } else if(tipo == boolean.class || tipo == Boolean.class) {
+            return valor.equals("verdade");
+        }
+        return valor;
+    }
+
+    // Java pra FP
+    private String converterResultado(Object resultado) {
+        if(resultado == null) return "vazio";
+        if(resultado instanceof Boolean) {
+            return (Boolean)resultado ? "verdade" : "falso";
+        }
+        return resultado.toString();
+    }
 }
 
 // API s nativas:
@@ -1937,6 +2080,17 @@ class ArquivosUtil {
                 e.printStackTrace();
             }
         }
+    }
+}
+
+// APIs
+class Matematica {
+    public double soma(double a, double b) {
+        return a + b;
+    }
+
+    public static double aleatorio() {
+        return Math.random();
     }
 }
 
