@@ -14,6 +14,9 @@ import java.util.Set;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.lang.reflect.Method;
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.lang.reflect.Field;
 
 enum TipoToken {
     // tipos:
@@ -1097,40 +1100,6 @@ class AnalisadorSintatico {
         return new NoFuncao(nome, parametros, corpo);
     }
 
-	private No chamadaFuncao() {
-		String nome = consumir(TipoToken.IDENTIFICADOR, "esperado nome da funcao").valor;
-		consumir(TipoToken.PARENTESE_ESQ, "esperado '('");
-
-		List<No> argumentos = new ArrayList<>();
-		int contadorSeguranca = 0;
-		final int MAX_ARGS = 255; // limite seguro de argumentos
-
-		// ler argumentos até encontrar o fechamento de parênteses
-		while(!verificar(TipoToken.PARENTESE_DIR) && contadorSeguranca < MAX_ARGS) {
-			argumentos.add(lerComparacao());
-			contadorSeguranca++;
-
-			// so consome virgula se houver mais argumentos
-			if(verificar(TipoToken.VIRGULA)) {
-				avancar();
-			} else {
-				break;
-			}
-		}
-		// verificação de segurança contra loops infinitos
-		if(contadorSeguranca >= MAX_ARGS) {
-			throw new RuntimeException("número excessivo de argumentos na função: " + nome);
-		}
-
-		consumir(TipoToken.PARENTESE_DIR, "esperado ')'");
-
-		// ponto e virgula é opcional
-		if(verificar(TipoToken.PONTO_VIRGULA)) {
-			avancar();
-		}
-		return new NoChamadaFuncao(nome, argumentos);
-	}
-
 	private No declaracaoCondicional() {
 		consumir(TipoToken.SE, "Esperado 'se'");
 		consumir(TipoToken.PARENTESE_ESQ, "Esperado '(' após 'se'");
@@ -1279,7 +1248,9 @@ class Interpretador {
     }
 	
 	public Interpretador(){
+		registrarClasseNativa("Sistema", Sistema.class);
 		registrarClasseNativa("Matematica", Matematica.class);
+		registrarClasseNativa("Arquivo", Arquivo.class);
 	}
 	
 	// execuções:
@@ -1288,7 +1259,7 @@ class Interpretador {
         for(No no : nos) {
             if(no instanceof NoIncluir) {
 				NoIncluir i = (NoIncluir) no;
-				AnalisadorLexico lexico = new AnalisadorLexico(FP.limpar(ArquivosUtil.lerArquivo(Environment.getExternalStorageDirectory()+i.caminho)));
+				AnalisadorLexico lexico = new AnalisadorLexico(FP.limpar(Arquivo.lerArquivo(Environment.getExternalStorageDirectory()+i.caminho)));
 				List<Token> tokens = lexico.tokenizar();
 				AnalisadorSintatico sintatico = new AnalisadorSintatico(tokens);
 				List<No> noss = sintatico.analisar();
@@ -1537,8 +1508,6 @@ class Interpretador {
                 instancias.remove(arg);
                 objetosNativos.remove(arg); // Libera instâncias nativas também
             }
-        } else if("proceTempoMilis".equals(chamada.nome)) {
-            return String.valueOf(System.currentTimeMillis());
         } else if("nativa".equals(chamada.nome)) {
             // Função para obter referência a classe nativa
             String nomeClasse = args.get(0);
@@ -1777,27 +1746,25 @@ class Interpretador {
 		
 		if(no instanceof NoAcessoPropriedade) {
 			NoAcessoPropriedade acesso = (NoAcessoPropriedade) no;
-			String objetoStr = resolverValor(acesso.objeto);
-			String propriedade = acesso.propriedade;
-			
-			// se for instancia
-			if(objetoStr.startsWith("instancia_")) {
-				ObjetoInstancia obj = instancias.get(objetoStr);
-				if(obj != null) {
-					return obj.obterCampo(propriedade);
+			String id = resolverValor(acesso.objeto);
+			if(objetosNativos.containsKey(id)) {
+				Object inst = objetosNativos.get(id);
+				try {
+					Field f = inst.getClass().getField(acesso.propriedade);
+					Object val = f.get(inst);
+					return converterResultado(val);
+				} catch(Exception e) {
 				}
 			}
-
-			// verifica se é um array e o campo é "tam"
-			if(objetoStr.startsWith("[") && objetoStr.endsWith("]")) {
-				if("tam".equals(propriedade)) {
-					String conteudo = objetoStr.substring(1, objetoStr.length() - 1).trim();
-					if(conteudo.isEmpty()) {
-						return "0";
-					}
-					String[] elementos = conteudo.split(",");
-					return String.valueOf(elementos.length);
-				}
+			if (id.startsWith("instancia_")) {
+				ObjetoInstancia obj = instancias.get(id);
+				if (obj != null) return obj.obterCampo(acesso.propriedade);
+			}
+			// tratamento de array
+			if(id.startsWith("[") && id.endsWith("]") && "tam".equals(acesso.propriedade)) {
+				String conteudo = id.substring(1, id.length() - 1).trim();
+				if(conteudo.isEmpty()) return "0";
+				return String.valueOf(conteudo.split(",").length);
 			}
 			return "vazio";
 		}
@@ -1817,7 +1784,6 @@ class Interpretador {
 					}
 				}
 			}
-
 			try {
 				int indice = Integer.parseInt(resolverValor(acesso.indice));
 				if(indice >= 0 && indice < elementos.size()) {
@@ -2017,20 +1983,46 @@ class Interpretador {
     }
 }
 
-// API s nativas:
-class ArquivosUtil {
-    private static boolean arquivoExiste(String caminho) {
+// APIs:
+class Sistema {
+	public static Long obTempoMilis() {
+		return System.currentTimeMillis();
+    }
+
+	public static void gc() {
+		System.gc();
+    }
+
+    public static Long obTempoNano() {
+		return System.nanoTime();
+    }
+
+	public static String obLogs() {
+		ByteArrayOutputStream saida = new ByteArrayOutputStream();
+        PrintStream antigo = System.out;
+        PrintStream novo = new PrintStream(saida);
+        System.setOut(novo);
+
+        System.out.flush();
+        System.setOut(antigo);
+
+        return saida.toString();
+    }
+}
+
+class Arquivo {
+    public static boolean arquivoExiste(String caminho) {
         File arquivo = new File(caminho);
         return arquivo.exists();
     }
 
-    private static void criarDiretorio(String caminho) {
+    public static void criarDiretorio(String caminho) {
         if(!arquivoExiste(caminho)) {
             File file = new File(caminho);
             file.mkdirs();
         }
     }
-	
+
     public static void criarNovoArquivo(String caminho) {
         int ultimoPasso= caminho.lastIndexOf(File.separator);
         if(ultimoPasso > 0) {
@@ -2052,8 +2044,7 @@ class ArquivosUtil {
 		try {
 			BufferedReader br = new BufferedReader(new FileReader(caminho));
 			String linha;
-			while((linha = br.readLine()) != null)
-			{
+			while((linha = br.readLine()) != null) {
 				sb.append(linha).append("\n");
 			}
 		} catch(Exception e) {
@@ -2062,7 +2053,7 @@ class ArquivosUtil {
 		return sb.toString();
 	}
 
-    public static void escreverArquivo(String caminho, String texto) {
+    public static void gravarArquivo(String caminho, String texto) {
         criarNovoArquivo(caminho);
         FileWriter escritor = null;
 
@@ -2083,13 +2074,31 @@ class ArquivosUtil {
     }
 }
 
-// APIs
 class Matematica {
-    public double soma(double a, double b) {
-        return a + b;
+	public static double PI = Math.PI;
+	public static double E = Math.E;
+	
+	public static double arredon(double x) {
+        return Math.floor(x);
     }
-
-    public static double aleatorio() {
+	
+	public static double abs(double x) {
+        return Math.abs(x);
+    }
+	
+	public static double sqrt(double x) {
+        return Math.sqrt(x);
+    }
+	
+	public static double sen(double x) {
+        return Math.sin(x);
+    }
+	
+    public static double cos(double x) {
+        return Math.cos(x);
+    }
+	
+	public static double aleatorio() {
         return Math.random();
     }
 }
