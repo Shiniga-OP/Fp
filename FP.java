@@ -57,6 +57,8 @@ enum TipoToken {
 	CONCHETE_ESQ,
 	CONCHETE_DIR,
     // expressoes:
+	INCLUIR,
+	MARCACAO,
 	PONTO,
     VIRGULA, 
     PONTO_VIRGULA,
@@ -206,6 +208,10 @@ class AnalisadorLexico {
 				tokens.add(new Token(TipoToken.PONTO, "."));
 				posicao++;
 				return true;
+			case '#':
+				tokens.add(new Token(TipoToken.MARCACAO, "#"));
+				posicao++;
+				return true;
         }
         return false;
     }
@@ -236,6 +242,7 @@ class AnalisadorLexico {
 			valor.equals("se") ? TipoToken.SE :
 			valor.equals("senao") ? TipoToken.SENAO :
 			valor.equals("senão") ? TipoToken.SENAO :
+			valor.equals("incluir") ? TipoToken.INCLUIR :
 			TipoToken.IDENTIFICADOR, valor
         );
     }
@@ -316,6 +323,17 @@ class NoAtribuicaoArray implements No {
     public NoAtribuicaoArray(No array, No indice, No valor) {
         this.array = array;
         this.indice = indice;
+        this.valor = valor;
+    }
+}
+
+class NoAtribuicaoPropriedade implements No {
+    No objeto;
+    String propriedade;
+    No valor;
+    public NoAtribuicaoPropriedade(No objeto, String propriedade, No valor) {
+        this.objeto = objeto;
+        this.propriedade = propriedade;
         this.valor = valor;
     }
 }
@@ -412,26 +430,12 @@ class NoAcessoPropriedade implements No {
     }
 }
 
-class NoAtribuicaoPropriedade implements No {
-    No objeto;
-    String propriedade;
-    No valor;
-    public NoAtribuicaoPropriedade(No objeto, String propriedade, No valor) {
-        this.objeto = objeto;
-        this.propriedade = propriedade;
-        this.valor = valor;
-    }
-}
+// importação:
+class NoIncluir implements No {
+    final String caminho;
 
-// 4) Nova AST para chamada de método:
-class NoChamadaMetodo implements No {
-    No objeto;
-    String nome;
-    List<No> argumentos;
-    public NoChamadaMetodo(No objeto, String nome, List<No> argumentos) {
-        this.objeto = objeto;
-        this.nome = nome;
-        this.argumentos = argumentos;
+    public NoIncluir(String caminho) {
+        this.caminho = caminho;
     }
 }
 
@@ -489,6 +493,18 @@ class NoChamadaFuncao implements No {
     List<No> argumentos;
 
     public NoChamadaFuncao(String nome, List<No> argumentos) {
+        this.nome = nome;
+        this.argumentos = argumentos;
+    }
+}
+
+class NoChamadaMetodo implements No {
+    No objeto;
+    String nome;
+    List<No> argumentos;
+
+    public NoChamadaMetodo(No objeto, String nome, List<No> argumentos) {
+        this.objeto = objeto;
         this.nome = nome;
         this.argumentos = argumentos;
     }
@@ -621,6 +637,7 @@ class AnalisadorSintatico {
 		if(verificar(TipoToken.ENQ)) return declaracaoEnq();
 		if(verificar(TipoToken.POR)) return declaracaoPor();
 		if(verificar(TipoToken.CLASSE)) return declaracaoClasse();
+		if(verificar(TipoToken.MARCACAO)) return declaracaoIncluir();
 		
 		// chamada dr netodo
 		if (olhar().tipo == TipoToken.IDENTIFICADOR
@@ -997,6 +1014,15 @@ class AnalisadorSintatico {
 		consumir(TipoToken.CHAVE_DIR, "Esperado '}'");
 		return new NoClasse(nome, membros);
 	}
+	
+	private No declaracaoIncluir() {
+		consumir(TipoToken.MARCACAO, "esperado '#'");
+        consumir(TipoToken.INCLUIR, "esperado 'incluir'");
+        String caminho = consumir(TipoToken.TEX, "esperado nome da variavel").valor;
+        consumir(TipoToken.PONTO_VIRGULA, "esperado ';' após inclusão");
+
+        return new NoIncluir(caminho);
+    }
 
 	private No declaracaoVariavel() {
         Token tokenTipo = olhar();
@@ -1220,7 +1246,14 @@ class Interpretador {
 	// globais:
     public void executar(List<No> nos) {
         for(No no : nos) {
-            if(no instanceof NoCondicional) {
+            if(no instanceof NoIncluir) {
+				NoIncluir i = (NoIncluir) no;
+				AnalisadorLexico lexico = new AnalisadorLexico(FP.limpar(ArquivosUtil.lerArquivo(Environment.getExternalStorageDirectory()+i.caminho)));
+				List<Token> tokens = lexico.tokenizar();
+				AnalisadorSintatico sintatico = new AnalisadorSintatico(tokens);
+				List<No> noss = sintatico.analisar();
+				executar(noss);
+			}else if(no instanceof NoCondicional) {
 				NoCondicional cond = (NoCondicional) no;
 				boolean resultado = avaliarCondicao(cond.condicao);
 				if(resultado) {
@@ -1312,40 +1345,39 @@ class Interpretador {
 			} else if(no instanceof NoClasse) {
 				NoClasse c = (NoClasse) no;
 				classes.put(c.nome, c);
-			} else if (no instanceof NoAtribuicaoPropriedade) {
+			} else if(no instanceof NoAtribuicaoPropriedade) {
 				NoAtribuicaoPropriedade a = (NoAtribuicaoPropriedade) no;
 				String id = resolverValor(a.objeto);
 				ObjetoInstancia obj = instancias.get(id);
 				obj.definirCampo(a.propriedade, resolverValor(a.valor));
-			} else if (no instanceof NoChamadaMetodo) {
-                // Executa chamadas de método diretamente
-                NoChamadaMetodo cm = (NoChamadaMetodo) no;
-                String id = resolverValor(cm.objeto);
-                ObjetoInstancia obj = instancias.get(id);
-                if(obj == null) {
-                    System.err.println("Objeto não encontrado: " + id);
-                    continue;
-                }
-                NoClasse def = obj.definicao;
-                for(No m : def.membros) {
-                    if(m instanceof NoFuncao && ((NoFuncao) m).nome.equals(cm.nome)) {
-                        NoFuncao f = (NoFuncao) m;
-                        Escopo anterior = escopoAtual;
-                        escopoAtual = new Escopo(anterior);
-                        escopoAtual.definir("este", TipoToken.TEX, id);
-                        for(int i = 0; i < f.parametros.size(); i++) {
-                            escopoAtual.definir(
-                                f.parametros.get(i),
-                                TipoToken.VARIAVEL,
-                                resolverValor(cm.argumentos.get(i))
-                            );
-                        }
-                        executar(f.corpo);
-                        escopoAtual = anterior;
-                        break;
-                    }
-                }
-            } else {
+			} else if(no instanceof NoChamadaMetodo) {
+				NoChamadaMetodo cm = (NoChamadaMetodo) no;
+				String id = resolverValor(cm.objeto);
+				ObjetoInstancia obj = instancias.get(id);
+				if(obj == null) {
+					System.err.println("Objeto não encontrado: " + id);
+					continue;
+				}
+				NoClasse def = obj.definicao;
+				for(No m : def.membros) {
+					if(m instanceof NoFuncao && ((NoFuncao) m).nome.equals(cm.nome)) {
+						NoFuncao f = (NoFuncao) m;
+						Escopo anterior = escopoAtual;
+						escopoAtual = new Escopo(anterior);
+						escopoAtual.definir("este", TipoToken.TEX, id);
+						for(int i = 0; i < f.parametros.size(); i++) {
+							escopoAtual.definir(
+								f.parametros.get(i),
+								TipoToken.VARIAVEL,
+								resolverValor(cm.argumentos.get(i))
+							);
+						}
+						executarBloco(f.corpo);
+						escopoAtual = anterior;
+						break;
+					}
+				}
+			} else {
 				System.err.println("tipo de nó desconhecido: " + no.getClass().getSimpleName());
             }
         } 
@@ -1465,32 +1497,23 @@ class Interpretador {
 			for(String arg : args) {
 				instancias.remove(arg);
 			}
-		} else if("FPexec".equals(chamada.nome)) {
-			new FP(args.get(0));
-			// mamatica:
-		} else if("mPI".equals(chamada.nome)) {
-			return "3.141592653589793";
-		} else if("mAbs".equals(chamada.nome)) {
-			return String.valueOf(Math.abs(Double.parseDouble(args.get(0))));
-		} else if("mAleatorio".equals(chamada.nome)) {
-			return String.valueOf(Math.random());
-		} else if("mSen".equals(chamada.nome)) {
-			return String.valueOf(Math.sin(Double.parseDouble(args.get(0))));
-		} else if("mCos".equals(chamada.nome)) {
-			return String.valueOf(Math.cos(Double.parseDouble(args.get(0))));
-			// armazenamento:
-		} else if("obExterno".equals(chamada.nome)) {
-			return Environment.getExternalStorageDirectory().toString();
-		} else if("gravarArquivo".equals(chamada.nome)) {
-			ArquivosUtil.escreverArquivo(args.get(0), args.get(1));
-		} else if("lerArquivo".equals(chamada.nome)) {
-			return ArquivosUtil.lerArquivo(args.get(0));
-		} else if("execArquivo".equals(chamada.nome)) {
-			new FP(ArquivosUtil.lerArquivo(args.get(0)));
+		} else if("proceTempoMilis".equals(chamada.nome)) {
+			return String.valueOf(System.currentTimeMillis());
 		} else {
-			System.err.println(ret);
+			return APIs.executar(chamada, args);
 		}
 		return ret;
+	}
+	
+	private String executarBloco(List<No> blocos) {
+		String valorRetorno = "";
+		for(No no : blocos) {
+			if(no instanceof NoRetorne) {
+				return resolverValor(((NoRetorne) no).valor);
+			}
+			executar(Collections.singletonList(no));
+		}
+		return valorRetorno;
 	}
 
 	private void executarChamada(NoChamadaFuncao chamada) {
@@ -1708,6 +1731,32 @@ class Interpretador {
 			instancias.put(id, obj);
 			return id;
 		}
+		if(no instanceof NoChamadaMetodo) {
+			NoChamadaMetodo cm = (NoChamadaMetodo) no;
+			String id = resolverValor(cm.objeto);
+			ObjetoInstancia obj = instancias.get(id);
+			if(obj == null) return "vazio";
+			NoClasse def = obj.definicao;
+			for(No m : def.membros) {
+				if(m instanceof NoFuncao && ((NoFuncao) m).nome.equals(cm.nome)) {
+					NoFuncao f = (NoFuncao) m;
+					Escopo anterior = escopoAtual;
+					escopoAtual = new Escopo(anterior);
+					escopoAtual.definir("este", TipoToken.TEX, id);
+					for(int i = 0; i < f.parametros.size(); i++) {
+						escopoAtual.definir(
+							f.parametros.get(i),
+							TipoToken.VARIAVEL,
+							resolverValor(cm.argumentos.get(i))
+						);
+					}
+					String valorRet = executarBloco(f.corpo);
+					escopoAtual = anterior;
+					return valorRet;
+				}
+			}
+			return "vazio";
+		}
         if(no instanceof NoChamadaFuncao) {
             return executarFuncaoExpressao((NoChamadaFuncao) no);
         }
@@ -1825,7 +1874,7 @@ class Interpretador {
     }
 }
 
-// API de arquivos nativa:
+// API s nativas:
 class ArquivosUtil {
     private static boolean arquivoExiste(String caminho) {
         File arquivo = new File(caminho);
@@ -1905,7 +1954,7 @@ public class FP {
 		}
     }
 	
-	private String limpar(String codigo) {
+	public static String limpar(String codigo) {
 		codigo = codigo.replaceAll("(?m)//.*", ""); // remove comentários de linha
 		codigo = codigo.replaceAll("(?s)/\\*.*?\\*/", ""); // remove comentários de bloco
 		codigo = codigo.replaceAll("[ \t]+", " "); // espaços e mais de 1 espaço
