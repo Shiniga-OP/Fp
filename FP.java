@@ -9,7 +9,6 @@ import java.io.File;
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.FileWriter;
-import android.os.Environment;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -17,6 +16,7 @@ import java.lang.reflect.Method;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.lang.reflect.Field;
+import android.os.Environment;
 
 enum TipoToken {
     // tipos:
@@ -91,7 +91,7 @@ class AnalisadorLexico {
 
     public AnalisadorLexico(String codigo) {
         this.codigo = codigo;
-        if(codigo.length()>100000) { // limite de tamanho do codigo
+        if(codigo.length()>1000000) { // limite de tamanho do codigo
             System.err.println("codigo muito grande para processar");
         }
     }
@@ -1239,6 +1239,7 @@ class Interpretador {
     private Escopo escopoAtual = new Escopo(null); // escopo global
 	private final Map<String, Class<?>> classesNativas = new HashMap<>();
     private final Map<String, Object> objetosNativos = new HashMap<>();
+	private FP ctx;
 
     class ClasseNativa {
         final Class<?> classe;
@@ -1247,7 +1248,8 @@ class Interpretador {
         }
     }
 	
-	public Interpretador(){
+	public Interpretador(FP ctx){
+		this.ctx = ctx;
 		registrarClasseNativa("Sistema", Sistema.class);
 		registrarClasseNativa("Matematica", Matematica.class);
 		registrarClasseNativa("Arquivo", Arquivo.class);
@@ -1259,7 +1261,7 @@ class Interpretador {
         for(No no : nos) {
             if(no instanceof NoIncluir) {
 				NoIncluir i = (NoIncluir) no;
-				AnalisadorLexico lexico = new AnalisadorLexico(FP.limpar(Arquivo.lerArquivo(Environment.getExternalStorageDirectory()+i.caminho)));
+				AnalisadorLexico lexico = new AnalisadorLexico(FP.limpar(Arquivo.lerArquivo(Arquivo.obExterno()+i.caminho)));
 				List<Token> tokens = lexico.tokenizar();
 				AnalisadorSintatico sintatico = new AnalisadorSintatico(tokens);
 				List<No> noss = sintatico.analisar();
@@ -1362,32 +1364,7 @@ class Interpretador {
 				ObjetoInstancia obj = instancias.get(id);
 				obj.definirCampo(a.propriedade, resolverValor(a.valor));
 			} else if(no instanceof NoChamadaMetodo) {
-				NoChamadaMetodo cm = (NoChamadaMetodo) no;
-				String id = resolverValor(cm.objeto);
-				ObjetoInstancia obj = instancias.get(id);
-				if(obj == null) {
-					System.err.println("Objeto não encontrado: " + id);
-					continue;
-				}
-				NoClasse def = obj.definicao;
-				for(No m : def.membros) {
-					if(m instanceof NoFuncao && ((NoFuncao) m).nome.equals(cm.nome)) {
-						NoFuncao f = (NoFuncao) m;
-						Escopo anterior = escopoAtual;
-						escopoAtual = new Escopo(anterior);
-						escopoAtual.definir("este", TipoToken.TEX, id);
-						for(int i = 0; i < f.parametros.size(); i++) {
-							escopoAtual.definir(
-								f.parametros.get(i),
-								TipoToken.VARIAVEL,
-								resolverValor(cm.argumentos.get(i))
-							);
-						}
-						executarBloco(f.corpo);
-						escopoAtual = anterior;
-						break;
-					}
-				}
+				resolverValor(no);
 			} else {
 				System.err.println("tipo de nó desconhecido: " + no.getClass().getSimpleName());
             }
@@ -1493,20 +1470,24 @@ class Interpretador {
 	
 	// nativas:
 	private String executarNativa(NoChamadaFuncao chamada) {
-        String ret = "função desconhecida: " + chamada.nome;
-        List<String> args = new ArrayList<>();
-        for(No arg : chamada.argumentos) args.add(resolverValor(arg));
+		String ret = "função desconhecida: " + chamada.nome;
+		List<String> args = new ArrayList<>();
+		
+		for(No ar : chamada.argumentos) {
+			args.add(resolverValor(ar)); // resolve cada argumento uma vez
+		}
 
-        if("log".equals(chamada.nome)) {
-            StringBuilder saida = new StringBuilder();
-            for(No ar : chamada.argumentos) {
-                saida.append(resolverValor(ar)).append(" ");
-            }
-            System.out.println(saida.toString().trim());
-        } else if("liberar".equals(chamada.nome)) {
+		if("log".equals(chamada.nome)) {
+			StringBuilder saida = new StringBuilder();
+			for(String arg : args) { // usa os valores já resolvidos
+				saida.append(arg).append(" ");
+			}
+			System.out.println(saida.toString().trim());
+			return "";
+		} else if("liberar".equals(chamada.nome)) {
             for(String arg : args) {
                 instancias.remove(arg);
-                objetosNativos.remove(arg); // Libera instâncias nativas também
+                objetosNativos.remove(arg); // libera instancias nativas tambem
             }
         } else if("nativa".equals(chamada.nome)) {
             // Função para obter referência a classe nativa
@@ -1524,9 +1505,12 @@ class Interpretador {
 		String valorRetorno = "";
 		for(No no : blocos) {
 			if(no instanceof NoRetorne) {
-				return resolverValor(((NoRetorne) no).valor);
+				valorRetorno = resolverValor(((NoRetorne) no).valor);
+				break;
 			}
-			executar(Collections.singletonList(no));
+			if(valorRetorno.equals("")) {
+				executar(Collections.singletonList(no));
+			}
 		}
 		return valorRetorno;
 	}
@@ -1669,6 +1653,7 @@ class Interpretador {
 	}
 	// resolvedores:
 	// resolve operações mamaticas:
+	
     private String resolverValor(No no) {
 		if(no instanceof NoNovo) {
             NoNovo n = (NoNovo) no;
@@ -1684,8 +1669,7 @@ class Interpretador {
                     e.printStackTrace();
                     return "vazio";
                 }
-            }
-			
+            }	
             String id = "instancia_" + (++contadorInstancias);
             // verificarse é classe FP
             if(classes.containsKey(n.nome)) {
@@ -1699,15 +1683,44 @@ class Interpretador {
         if(no instanceof NoChamadaMetodo) {
             NoChamadaMetodo cm = (NoChamadaMetodo) no;
             String id = resolverValor(cm.objeto);
+			
+			if(instancias.containsKey(id)) {
+				ObjetoInstancia obj = instancias.get(id);
 
+				if(obj == null) return "vazio";
+
+				NoClasse def = obj.definicao;
+
+				for(No m : def.membros) {
+					if(m instanceof NoFuncao && ((NoFuncao) m).nome.equals(cm.nome)) {
+						NoFuncao f = (NoFuncao) m;
+						Escopo anterior = escopoAtual;
+						escopoAtual = new Escopo(anterior);
+						escopoAtual.definir("este", TipoToken.TEX, id);
+
+						for(int i = 0; i < f.parametros.size(); i++) {
+							escopoAtual.definir(
+								f.parametros.get(i),
+								TipoToken.VARIAVEL,
+								resolverValor(cm.argumentos.get(i))
+							);
+						}
+						String valorRet = executarBloco(f.corpo);
+						escopoAtual = anterior;
+						return valorRet;
+					}
+				}
+				return "vazio";
+			}
+			
             // chamada para instancia nativa
             if(objetosNativos.containsKey(id)) {
                 Object objeto = objetosNativos.get(id);
                 try {
                     // encontra o metodo pelo nome e parametros
                     Method metodo = null;
-                    for (Method m : objeto.getClass().getMethods()) {
-                        if (m.getName().equals(cm.nome) && 
+                    for(Method m : objeto.getClass().getMethods()) {
+                        if(m.getName().equals(cm.nome) && 
                             m.getParameterCount() == cm.argumentos.size()) {
                             metodo = m;
                             break;
@@ -1756,7 +1769,7 @@ class Interpretador {
 				} catch(Exception e) {
 				}
 			}
-			if (id.startsWith("instancia_")) {
+			if(id.startsWith("instancia_")) {
 				ObjetoInstancia obj = instancias.get(id);
 				if (obj != null) return obj.obterCampo(acesso.propriedade);
 			}
@@ -1805,40 +1818,6 @@ class Interpretador {
 			return sb.toString();
 		}
 		
-		if(no instanceof NoNovo) {
-			NoNovo n = (NoNovo) no;
-			String id = "instancia_" + (++contadorInstancias);
-			ObjetoInstancia obj = criarInstancia(n.nome);
-			if(obj == null) return "vazio";
-			instancias.put(id, obj);
-			return id;
-		}
-		if(no instanceof NoChamadaMetodo) {
-			NoChamadaMetodo cm = (NoChamadaMetodo) no;
-			String id = resolverValor(cm.objeto);
-			ObjetoInstancia obj = instancias.get(id);
-			if(obj == null) return "vazio";
-			NoClasse def = obj.definicao;
-			for(No m : def.membros) {
-				if(m instanceof NoFuncao && ((NoFuncao) m).nome.equals(cm.nome)) {
-					NoFuncao f = (NoFuncao) m;
-					Escopo anterior = escopoAtual;
-					escopoAtual = new Escopo(anterior);
-					escopoAtual.definir("este", TipoToken.TEX, id);
-					for(int i = 0; i < f.parametros.size(); i++) {
-						escopoAtual.definir(
-							f.parametros.get(i),
-							TipoToken.VARIAVEL,
-							resolverValor(cm.argumentos.get(i))
-						);
-					}
-					String valorRet = executarBloco(f.corpo);
-					escopoAtual = anterior;
-					return valorRet;
-				}
-			}
-			return "vazio";
-		}
         if(no instanceof NoChamadaFuncao) {
             return executarFuncaoExpressao((NoChamadaFuncao) no);
         }
@@ -2022,6 +2001,10 @@ class Arquivo {
             file.mkdirs();
         }
     }
+	
+	public static String obExterno() {
+        return Environment.getExternalStorageDirectory().toString();
+    }
 
     public static void criarNovoArquivo(String caminho) {
         int ultimoPasso= caminho.lastIndexOf(File.separator);
@@ -2111,7 +2094,7 @@ public class FP {
 			List<Token> tokens = lexico.tokenizar();
 			AnalisadorSintatico sintatico = new AnalisadorSintatico(tokens);
 			List<No> nos = sintatico.analisar();
-			new Interpretador().executar(nos);
+			new Interpretador(this).executar(nos);
 		} catch(Exception e) {
 			System.out.println("erro: "+e);
 		}
