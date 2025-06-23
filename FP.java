@@ -39,6 +39,11 @@ enum TipoToken {
 	POR,
 	ENQ,
 	IGUAL_IGUAL,
+	MAIS_IGUAL,
+	MULTI_IGUAL,
+	DIVIS_IGUAL,
+	PORCEN_IGUAL,
+	MENOS_IGUAL,
 	DIFERENTE,
 	MAIOR,
 	MENOR,
@@ -154,8 +159,13 @@ class AnalisadorLexico {
                 posicao++;
                 return true;
 			case '+':
-                tokens.add(new Token(TipoToken.ADICAO, "+"));
-                posicao++;
+				if(posicao+1<codigo.length() && codigo.charAt(posicao+1)=='=') {
+					tokens.add(new Token(TipoToken.MAIS_IGUAL, "+="));
+					posicao += 2;
+				} else {
+					tokens.add(new Token(TipoToken.ADICAO, "+"));
+					posicao++;
+				}
                 return true;
 			case '-':
                 tokens.add(new Token(TipoToken.SUBTRACAO, "-"));
@@ -352,60 +362,46 @@ class NoValor implements No {
     }
 }
 
-class NoAdicao implements No {
-    No esquerda, direita;
+class NoBinaria implements No {
+	No esquerda, direita;
 
+    public NoBinaria(No esquerda, No direita) {
+        this.esquerda = esquerda;
+        this.direita = direita;
+    }
+}
+
+class NoAdicao extends NoBinaria {
     public NoAdicao(No esquerda, No direita) {
-        this.esquerda = esquerda;
-        this.direita = direita;
+        super(esquerda, direita);
     }
 }
 
-class NoSubtracao implements No {
-    No esquerda, direita;
-
+class NoSubtracao extends NoBinaria {
     public NoSubtracao(No esquerda, No direita) {
-        this.esquerda = esquerda;
-        this.direita = direita;
+        super(esquerda, direita);
     }
 }
 
-class NoMultiplicacao implements No {
-    No esquerda, direita;
-
+class NoMultiplicacao extends NoBinaria {
     public NoMultiplicacao(No esquerda, No direita) {
-        this.esquerda = esquerda;
-        this.direita = direita;
+        super(esquerda, direita);
     }
 }
 
-class NoDivisao implements No {
-    No esquerda, direita;
-
+class NoDivisao extends NoBinaria {
     public NoDivisao(No esquerda, No direita) {
-        this.esquerda = esquerda;
-        this.direita = direita;
+        super(esquerda, direita);
     }
 }
 
-class NoPorcentagem implements No {
-    No esquerda,  direita;
-
+class NoPorcentagem extends NoBinaria {
     public NoPorcentagem(No esquerda, No direita) {
-        this.esquerda = esquerda;
-        this.direita = direita;
+        super(esquerda, direita);
     }
 }
 
-// variaveis
-class NoVariavel implements No {
-    String nome;
-
-    public NoVariavel(String nome) {
-        this.nome = nome;
-    }
-}
-
+// variaveis:
 class NoArray implements No {
     List<No> itens;
 
@@ -546,57 +542,39 @@ class NoPor implements No {
     }
 }
 
-class NoIgualIgual implements No {
-    No esquerda, direita;
-
+class NoIgualIgual extends NoBinaria {
     public NoIgualIgual(No esq, No dir) {
-		this.esquerda = esq;
-		this.direita = dir;
+		super(esq, dir);
 	}
 }
 
-class NoDiferente implements No {
-    No esquerda, direita;
-
+class NoDiferente extends NoBinaria {
     public NoDiferente(No esq, No dir) {
-		this.esquerda = esq;
-		this.direita = dir;
+		super(esq, dir);
 	}
 }
 
-class NoMaior implements No {
-    No esquerda, direita;
-
+class NoMaior extends NoBinaria {
     public NoMaior(No esq, No dir) {
-		this.esquerda = esq;
-		this.direita = dir;
+		super(esq, dir);
 	}
 }
 
-class NoMaiorIgual implements No {
-    No esquerda, direita;
-
+class NoMaiorIgual extends NoBinaria {
     public NoMaiorIgual(No esq, No dir) {
-		this.esquerda = esq;
-		this.direita = dir;
+		super(esq, dir);
 	}
 }
 
-class NoMenor implements No {
-    No esquerda, direita;
-
+class NoMenor extends NoBinaria {
     public NoMenor(No esq, No dir) {
-		this.esquerda = esq;
-		this.direita = dir;
+		super(esq, dir);
 	}
 }
 
-class NoMenorIgual implements No {
-    No esquerda, direita;
-
+class NoMenorIgual extends NoBinaria {
     public NoMenorIgual(No esq, No dir) {
-		this.esquerda = esq;
-		this.direita = dir;
+		super(esq, dir);
 	}
 }
 
@@ -684,17 +662,95 @@ class AnalisadorSintatico {
 			consumir(TipoToken.PONTO_VIRGULA,"");
 			return new NoAtribuicaoPropriedade(objeto, prop, val);
 		}
+		
+		if(olhar().tipo == TipoToken.IDENTIFICADOR) {
+			TipoToken prox = olharProximo(1).tipo;
+			switch(prox) {
+				case MAIS_IGUAL:
+				case MENOS_IGUAL:
+				case MULTI_IGUAL:
+				case DIVIS_IGUAL:
+				case PORCEN_IGUAL:
+					String nome = avancar().valor; // IDENTIFICADOR
+					avancar(); // operador composto
+					No expr = lerComparacao();
+					consumir(TipoToken.PONTO_VIRGULA, "Esperado ';' após operador composto");
+
+					No var = new NoValor(nome, TipoToken.IDENTIFICADOR);
+					No oper = null;
+					switch(prox) {
+						case MAIS_IGUAL:    oper = new NoAdicao(var, expr); break;
+						case MENOS_IGUAL:   oper = new NoSubtracao(var, expr); break;
+						case MULTI_IGUAL:   oper = new NoMultiplicacao(var, expr); break;
+						case DIVIS_IGUAL:   oper = new NoDivisao(var, expr); break;
+						case PORCEN_IGUAL:  oper = new NoPorcentagem(var, expr); break;
+					}
+					return new NoAtribuicao(nome, null, oper);
+				default: break;
+			}
+		}
+		// arrays:
 		if(olhar().tipo == TipoToken.IDENTIFICADOR && 
 		   olharProximo(1).tipo == TipoToken.CONCHETE_ESQ) {
+
 			Token nome = avancar();
 			avancar(); // consome '['
 			No indice = lerComparacao();
 			consumir(TipoToken.CONCHETE_DIR, "Esperado ']'");
+
+			// verifica operadores compostos
+			if(verificar(TipoToken.MAIS_IGUAL) ||
+			   verificar(TipoToken.MENOS_IGUAL) ||
+			   verificar(TipoToken.MULTI_IGUAL) ||
+			   verificar(TipoToken.DIVIS_IGUAL) ||
+			   verificar(TipoToken.PORCEN_IGUAL)) {
+
+				TipoToken operador = olhar().tipo;
+				avancar(); // consome o operador
+
+				No valorDireita = lerComparacao();
+				consumir(TipoToken.PONTO_VIRGULA, "Esperado ';'");
+
+				No acessoAtual = new NoAcessoArray(
+					new NoValor(nome.valor, nome.tipo),
+					indice
+				);
+
+				No operacao;
+				switch(operador) {
+					case MAIS_IGUAL:
+						operacao = new NoAdicao(acessoAtual, valorDireita);
+						break;
+					case MENOS_IGUAL:
+						operacao = new NoSubtracao(acessoAtual, valorDireita);
+						break;
+					case MULTI_IGUAL:
+						operacao = new NoMultiplicacao(acessoAtual, valorDireita);
+						break;
+					case DIVIS_IGUAL:
+						operacao = new NoDivisao(acessoAtual, valorDireita);
+						break;
+					case PORCEN_IGUAL:
+						operacao = new NoPorcentagem(acessoAtual, valorDireita);
+						break;
+					default:
+						throw new RuntimeException("Operador inválido");
+				}
+
+				return new NoAtribuicaoArray(
+					new NoValor(nome.valor, nome.tipo),
+					indice,
+					operacao
+				);
+			}
+			// atribuicao normal
 			consumir(TipoToken.ATRIBUICAO, "Esperado '=' após índice");
 			No valor = lerComparacao();
 			consumir(TipoToken.PONTO_VIRGULA, "Esperado ';' após atribuição");
 			return new NoAtribuicaoArray(new NoValor(nome.valor, nome.tipo), indice, valor);
 		}
+		
+		// "="
 		if(olhar().tipo == TipoToken.IDENTIFICADOR && 
 		   olharProximo(1).tipo == TipoToken.ATRIBUICAO) {
 			Token nome = avancar();
@@ -1250,9 +1306,6 @@ class Interpretador {
 	
 	public Interpretador(FP ctx){
 		this.ctx = ctx;
-		registrarClasseNativa("Sistema", Sistema.class);
-		registrarClasseNativa("Matematica", Matematica.class);
-		registrarClasseNativa("Arquivo", Arquivo.class);
 	}
 	
 	// execuções:
@@ -1261,11 +1314,21 @@ class Interpretador {
         for(No no : nos) {
             if(no instanceof NoIncluir) {
 				NoIncluir i = (NoIncluir) no;
-				AnalisadorLexico lexico = new AnalisadorLexico(FP.limpar(Arquivo.lerArquivo(Arquivo.obExterno()+i.caminho)));
-				List<Token> tokens = lexico.tokenizar();
-				AnalisadorSintatico sintatico = new AnalisadorSintatico(tokens);
-				List<No> noss = sintatico.analisar();
-				executar(noss);
+				if(i.caminho.equals("utils/Mat")) {
+					registrarClasseNativa("Mat", Matematica.class);
+				} else if(i.caminho.equals("utils/Arquivo")) {
+					registrarClasseNativa("util/Arquivo", Arquivo.class);
+				} else if(i.caminho.equals("motor/Sistema")) {
+					registrarClasseNativa("Sistema", Sistema.class);
+				} else if(i.caminho.equals("grafico/Matriz")) {
+					registrarClasseNativa("Matriz", Matriz.class);
+				} else {
+					AnalisadorLexico lexico = new AnalisadorLexico(FP.limpar(Arquivo.lerArquivo(Arquivo.obExterno()+i.caminho)));
+					List<Token> tokens = lexico.tokenizar();
+					AnalisadorSintatico sintatico = new AnalisadorSintatico(tokens);
+					List<No> noss = sintatico.analisar();
+					executar(noss);
+				}
 			}else if(no instanceof NoCondicional) {
 				NoCondicional cond = (NoCondicional) no;
 				boolean resultado = avaliarCondicao(cond.condicao);
@@ -1362,7 +1425,12 @@ class Interpretador {
 				NoAtribuicaoPropriedade a = (NoAtribuicaoPropriedade) no;
 				String id = resolverValor(a.objeto);
 				ObjetoInstancia obj = instancias.get(id);
-				obj.definirCampo(a.propriedade, resolverValor(a.valor));
+				if(obj != null) {
+					obj.definirCampo(a.propriedade, resolverValor(a.valor));
+				} else {
+					System.out.println("ERRO INSTANCIA FAZIA: "+obj.nomeClasse);
+					return;
+				}
 			} else if(no instanceof NoChamadaMetodo) {
 				resolverValor(no);
 			} else {
@@ -1479,7 +1547,7 @@ class Interpretador {
 
 		if("log".equals(chamada.nome)) {
 			StringBuilder saida = new StringBuilder();
-			for(String arg : args) { // usa os valores já resolvidos
+			for(String arg : args) { // usa os valores resolvidos
 				saida.append(arg).append(" ");
 			}
 			System.out.println(saida.toString().trim());
@@ -1490,7 +1558,7 @@ class Interpretador {
                 objetosNativos.remove(arg); // libera instancias nativas tambem
             }
         } else if("nativa".equals(chamada.nome)) {
-            // Função para obter referência a classe nativa
+            // função para obter referencia a classe nativa
             String nomeClasse = args.get(0);
             Class<?> classe = classesNativas.get(nomeClasse);
             if(classe == null) return "vazio";
@@ -1660,12 +1728,16 @@ class Interpretador {
 			
 			if(classesNativas.containsKey(n.nome)) {
                 Class<?> classe = classesNativas.get(n.nome);
+				if(classe == null) {
+					System.out.println("ERRO CLASSE NÃO ENCONTRADA: "+n.nome);
+				}
                 try {
                     Object instancia = classe.newInstance();
                     String id = "instancia_nativa_" + (++contadorInstancias);
                     objetosNativos.put(id, instancia);
                     return id;
                 } catch(Exception e) {
+					System.out.println("ERRO NA INSTANCIA: "+n.nome);
                     e.printStackTrace();
                     return "vazio";
                 }
@@ -1674,7 +1746,10 @@ class Interpretador {
             // verificarse é classe FP
             if(classes.containsKey(n.nome)) {
                 ObjetoInstancia obj = criarInstancia(n.nome);
-                if(obj == null) return "vazio";
+                if(obj == null) {
+					System.out.println("ERRO INSTANCIA VAZIA: "+id);
+					return "vazio";
+				}
                 instancias.put(id, obj);
                 return id;
             }
@@ -1687,7 +1762,10 @@ class Interpretador {
 			if(instancias.containsKey(id)) {
 				ObjetoInstancia obj = instancias.get(id);
 
-				if(obj == null) return "vazio";
+				if(obj == null) {
+					System.out.println("ERRO OBJETO VAZIO: "+id);
+					return "vazio";
+				}
 
 				NoClasse def = obj.definicao;
 
@@ -1728,8 +1806,9 @@ class Interpretador {
                     }
 
                     if(metodo == null) {
-                        return "vazio";
-                    }
+						System.out.println("ERRO METODO NÃO EXISTE: "+cm.nome);
+						return "vazio";
+					}
 
                     // converte argumentos
                     Object[] args = new Object[cm.argumentos.size()];
@@ -1743,6 +1822,7 @@ class Interpretador {
                     Object resultado = metodo.invoke(objeto, args);
                     return converterResultado(resultado);
                 } catch(Exception e) {
+					System.out.println("ERRO NA INSTANCIA: "+id);
                     e.printStackTrace();
                     return "vazio";
                 }
@@ -1767,6 +1847,7 @@ class Interpretador {
 					Object val = f.get(inst);
 					return converterResultado(val);
 				} catch(Exception e) {
+					System.out.println("ERRO DE ACESSO: "+id);
 				}
 			}
 			if(id.startsWith("instancia_")) {
@@ -2055,6 +2136,12 @@ class Arquivo {
             }
         }
     }
+}
+
+class Matriz {
+	public Matriz(String a) {
+		System.out.println("aaa: "+a);
+	}
 }
 
 class Matematica {
