@@ -1,4 +1,4 @@
-#incluir "/nativa/Matematica.fp";
+#incluir "utils/Mat";
 #incluir "/FIDE/olaMundo.fp";
 
 log("[teste 1]: log(), condicionais e variáveis");
@@ -20,7 +20,7 @@ por(var x = 0; x < 5; x = x + 1) {
 
 enq(a < 5) {
 	log(a+" na conta");
-	a = a + 1;
+	a += 1;
 }
 
 log("[teste 3]: funções nativas e funções comuns com retorno");
@@ -59,10 +59,10 @@ Int i = 0;
 
 enq(i < 3) {
 	log(arr[i]);
-	i = i + 1;
+	i += 1;
 }
 
-arr[0] = arr[0] + 5;
+arr[0] += 5;
 log(arr[0]);
 log(arr.tam);
 
@@ -110,7 +110,7 @@ log(p.teste(" aaus"));
 
 log("[teste 7]: classes nativas do Java");
 
-var m = novo Matematica();
+var m = novo Mat();
 log(m.cos(2.5));
 log(m.sen(7));
 log(m.aleatorio());
